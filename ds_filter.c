@@ -6,16 +6,16 @@
  * Generate the random list number:
  *   https://www.random.org/integer-sets/?sets=1666&num=6&min=1&max=50&sort=on&order=values&format=plain&rnd=new
  * 
- * Compilar com:
- *   gcc -Wall dupla_filter.c -o dupla_filter
+ * Compile with gcc:
+ *   gcc -Wall -O3 ds_filter.c -o ds_filter
  *
  * Revisions:
- * 2019-05-16 - Add -n parameter do generate random numbers
- * 2019-02-28 - Version 2
- *            - Add "soma" on result
- *            - use static params variable with struct
- * 2019-01-31 - Add -c parameter
- *
+ *   2019-06-04 - Buf fix on function get_valid_sequence()
+ *   2019-05-16 - Add -n parameter do generate random numbers
+ *   2019-02-28 - Version 2
+ *              - Add "soma" on result
+ *              - use static params variable with struct
+ *   2019-01-31 - Add -c parameter
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -80,13 +80,13 @@ void get_valid_sequence( node_t *node ) {
   
     // verifica se a sequencia possui numeros repetidos
     for ( i=0; i < QTD_NUM_SORTEADOS; i++ ) {
-      if ( arr_tmp[node->lottery_ticket_arr[i]] == 1 ) {
+      if ( arr_tmp[node->lottery_ticket_arr[i]-1] == 1 ) {
         seq_valida = false;
         break;
       }
       else {
         seq_valida = true;
-        arr_tmp[node->lottery_ticket_arr[i]]++;
+        arr_tmp[node->lottery_ticket_arr[i]-1]++;
       }
     }
   }
