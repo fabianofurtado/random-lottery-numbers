@@ -18,8 +18,10 @@
  *   dezenas = [3,4,5,6,7,9,10,11,13,14,15,16,17,22,23];
  * };
  *
- * * * * * * * * * * * * * * * * * * * * * * * 
+ * * * * * * * * * * * * * * * * * * * * * * *
  * Historico:
+ *   * 2019-06-04 - Correcao de bugs
+ *                - Inclusao do parametro "a11"
  *   * 2019-05-15 - Uso de variavel static para parametros
  *                - Inclusao da SOMA na saida
  *                - Saida com combinacoes unicas quando se utiliza numeros randomicos
@@ -62,7 +64,7 @@ typedef struct node {
 
 typedef struct {
   bool p6, p7, p8, p9,
-       a7, a8, a9, a10,
+       a7, a8, a9, a10, a11,
        r4, r5, r6, r7,
        dl43332, dl44322, dl44331, dl53322, dl54321,
        dc43332, dc44322, dc44331, dc53322, dc54321;
@@ -102,13 +104,13 @@ void get_valid_sequence( node_t *node ) {
   
     // verifica se a sequencia possui numeros repetidos
     for ( i=0; i < QTD_NUM_SORTEADOS; i++ ) {
-      if ( arr_tmp[node->lottery_ticket_arr[i]] == 1 ) {
+      if ( arr_tmp[node->lottery_ticket_arr[i]-1] == 1 ) {
         seq_valida = false;
         break;
       }
       else {
         seq_valida = true;
-        arr_tmp[node->lottery_ticket_arr[i]]++;
+        arr_tmp[node->lottery_ticket_arr[i]-1]++;
       }
     }
   }
@@ -285,10 +287,11 @@ bool numeros_repetidos_concurso_anterior_ok( node_t *current, param_t *p ) {
         break;
       }
     
-  return ( ( ( p->a7 )  && ( num_repetidos == 7 ) ) ||
-           ( ( p->a8 )  && ( num_repetidos == 8 ) ) ||
-           ( ( p->a9 )  && ( num_repetidos == 9 ) ) ||
-           ( ( p->a10 ) && ( num_repetidos == 10 ) ) );
+  return ( ( ( p->a7 )  && ( num_repetidos == 7 ) )  ||
+           ( ( p->a8 )  && ( num_repetidos == 8 ) )  ||
+           ( ( p->a9 )  && ( num_repetidos == 9 ) )  ||
+           ( ( p->a10 ) && ( num_repetidos == 10 ) ) ||
+           ( ( p->a11 ) && ( num_repetidos == 11 ) ) );
 }
 
 
@@ -533,7 +536,7 @@ void filter_list( node_t **head, param_t *p ) {
     }
   }
 
-  if ( (p->a7) || (p->a8) || (p->a9) || (p->a10) ) {
+  if ( (p->a7) || (p->a8) || (p->a9) || (p->a10) || (p->a11) ) {
     current = *head;
     while ( current != NULL ) {
       if ( numeros_repetidos_concurso_anterior_ok( current, p ) == false ) {
@@ -741,10 +744,11 @@ void print_help( const char argv0[] ) {
   printf( "              -p9, filtra por 9 pares (e 6 impares)\n" );
   printf( "  -a<quantidade de numeros repetidos do concurso anterior>\n");
   printf( "     Estatisticamente:\n" );
-  printf( "       -a9  = 33.50%%\n" );
-  printf( "       -a8  = 25.07%%\n" );
-  printf( "       -a10 = 21.02%%\n" );
-  printf( "       -a7  =  9.27%%\n" );  
+  printf( "       -a9  = 33.44%%\n" );
+  printf( "       -a8  = 25.21%%\n" );
+  printf( "       -a10 = 21.14%%\n" );
+  printf( "       -a7  =  9.12%%\n" );
+  printf( "       -a11 =  8.13%%\n" );
   printf( "  -i<min>, soma MINIMA de todos os numeros\n");
   printf( "  -x<max>, soma MAXIMA de todos os numeros\n");
   printf( "    * Estatisticamente, recomanda-se <min> = 184 e <max> = 199\n" );
@@ -832,6 +836,7 @@ int main( int argc, char *argv[] ) {
           case  8: p.a8 = true; break;
           case  9: p.a9 = true; break;
           case 10: p.a10 = true; break;
+          case 11: p.a11 = true; break;
           default:
             printf( "\nERRO! Parametro \"numero repetidos do concurso anterior\" '-a%s' invalido!\n\n", optarg );
             return 1;
@@ -959,7 +964,7 @@ int main( int argc, char *argv[] ) {
     }
   }
 
-  if (p.a7 || p.a8 || p.a9 || p.a10)
+  if ( p.a7 || p.a8 || p.a9 || p.a10 || p.a11 )
      read_conf_file(&(p.ultimo_concurso));
 
   tmp_node = create_node();
