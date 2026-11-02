@@ -20,12 +20,17 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * *
  * Historico:
+ *   * 2026-11-02 - Inclusao dos parametros "-m" (maximo de primos) e "-v"
+ *                  (estatisticas de cada combinacao)
+ *                - Estatisticas calculadas uma unica vez por combinacao
+ *                  (stats_T) e usadas pelos filtros e pela impressao
  *   * 2026-11-01 - Correcao no RNG
  *   * 2019-06-04 - Correcao de bugs
  *                - Inclusao do parametro "a11"
  *   * 2019-05-15 - Uso de variavel static para parametros
  *                - Inclusao da SOMA na saida
- *                - Saida com combinacoes unicas quando se utiliza numeros randomicos
+ *                - Saida com combinacoes unicas quando se utiliza
+ *                  numeros randomicos
  *   * 2019-05-14 - Geracao de numeros randomicos
  *   * 2019-02-25 - Add "-r" option
  */
@@ -55,6 +60,8 @@
 #define MAX_COMB              3268760UL // C(25,15) = C(25,10) =
                                         //                    25!/(15!*(25-15)!)
 #define CONF_FILE             "lf_filter.conf"
+#define LF_MAX_PRIME          9
+#define UNDEFINED_VALUE       -1
 
 
 typedef struct {
@@ -63,24 +70,41 @@ typedef struct {
   uint8_t a_dezenas[QTD_NUM_SORTEADOS];
 } concurso_T;
 
+typedef struct {
+  uint32_t mask;      /* bit n ligado = numero n sorteado (n = 1..25) */
+  uint16_t soma,
+           linha,     /* padrao das linhas, ex: 43332  */
+           coluna;    /* padrao das colunas, ex: 44322 */
+  uint8_t  pares,
+           primos,
+           repetidos, /* repetidos do concurso anterior (so com -a) */
+           seq_sort,  /* maior sequencia de numeros sorteados     */
+           seq_desc;  /* maior sequencia de numeros NAO sorteados */
+} stats_T;
+
 typedef struct node {
-  uint8_t a_lottery_ticket[QTD_NUM_SORTEADOS];
+  uint8_t a_lt[QTD_NUM_SORTEADOS]; /* array of lottery ticket */
+  stats_T st;         /* calculado por calc_stats() */
   struct node * next;
 } node_T;
 
 typedef struct {
-  bool p6, p7, p8, p9,
+  bool verbose,
+       p6, p7, p8, p9,
        a7, a8, a9, a10, a11,
-       r4, r5, r6, r7,
        dl43332, dl44322, dl44331, dl53322, dl54321,
        dc43332, dc44322, dc44331, dc53322, dc54321;
-  concurso_T ultimo_concurso;
-  uint8_t a_fixos[NUM_MAX_FIXOS+1],             // +1 for "\0" to strlen()
-          a_descartados[NUM_MAX_DESCARTADOS+1], // +1 for "\0" to strlen()
+  concurso_T *ultimo_concurso; /* algum "-a" informado: le o arquivo .conf */
+  uint8_t qtd_fixos,
+          qtd_descartados,
           seq_min_sorteados,
           seq_min_descartados;
-  uint16_t soma_min,
-           soma_max;
+  int8_t  primo_min,
+          primo_max;
+  uint16_t soma_min, // 1+2+3+4+5+6+7+8+9+10+11+12+13+14+15          = 120 min
+           soma_max; // 11+12+13+14+15+16+17+18+19+20+21+22+23+24+25 = 270 max
+  uint32_t mask_fixos,       /* bit n ligado = numero n fixo       */
+           mask_descartados; /* bit n ligado = numero n descartado */
   uint64_t qtd_comb_randomicas;
 } param_T;
 
@@ -106,14 +130,28 @@ qsort_desc( const void * a, const void * b )
 }
 
 
+static bool
+is_lf_prime( uint8_t n )
+{
+  uint8_t uc;
+  const uint8_t lf_prime[LF_MAX_PRIME] = { 2, 3, 5, 7, 11, 13, 17, 19, 23 };
+
+
+  for ( uc = 0 ; uc < LF_MAX_PRIME ; uc++ ) {
+    if ( n  == lf_prime[uc] )
+      return true;
+  }
+  return false;
+}
+
+
 static void
 get_valid_sequence( node_T *node ) // Baseado em Fisher-Yates
 {
   uint32_t i, /* contador do laco e fronteira do baralho. Marca quantas cartas
                  ja foram sorteadas (0..i-1) e onde comeca a regiao ainda
                  disponivel (i..NUM_MAXIMO-1). Tambem e o indice onde o numero
-                 sorteado vai parar, tanto em tmp_pool quanto em
-                 a_lottery_ticket. */
+                 sorteado vai parar, tanto em tmp_pool quanto em a_lt. */
            j; /* indice sorteado. Aponta, dentro da região disponivel
                  (i..NUM_MAXIMO-1), qual carta foi escolhida nesta iteracao.
                  Vale i + um deslocamento aleatorio de 0 a NUM_MAXIMO-1-i. */
@@ -128,28 +166,248 @@ get_valid_sequence( node_T *node ) // Baseado em Fisher-Yates
     tmp = tmp_pool[i];
     tmp_pool[i] = tmp_pool[j];
     tmp_pool[j] = tmp;
-    node->a_lottery_ticket[i] = tmp_pool[i];
+    node->a_lt[i] = tmp_pool[i];
   }
 }
 
 
-static void
-print_list( node_T *head )
+static uint8_t
+conta_pares( const uint8_t *lottery_ticket )
 {
-  uint8_t i;
-  uint16_t soma = 0;
-  node_T * current = head;
+  uint8_t i,
+          n = 0;
+
+
+  for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
+    if ( lottery_ticket[i] % 2 == 0 )
+      n++;
+
+  return n;
+}
+
+
+static uint8_t
+conta_primos( const uint8_t *lottery_ticket )
+{
+  uint8_t i, n = 0;
+
+
+  for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
+    if ( is_lf_prime( lottery_ticket[i] ) )
+      n++;
+
+  return n;
+}
+
+
+static uint8_t
+conta_repetidos_uc( const uint8_t *lt, const concurso_T *uc )
+{
+  uint8_t i,
+          n = 0;
+
+  if ( uc != NULL ) {
+    for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
+      if ( memchr( uc->a_dezenas, lt[i], QTD_NUM_SORTEADOS ) != NULL )
+        n++;
+  }
+
+  return n;
+}
+
+
+static uint16_t
+padrao_linha( const uint8_t *lottery_ticket )
+{
+  uint8_t  i,
+           linha[QTD_LINHAS] = { 0 };
+  uint16_t padrao = 0;
+
+
+  for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
+    linha[ ( lottery_ticket[i] - 1 ) / 5 ]++;
+  qsort( linha, QTD_LINHAS, sizeof( linha[0] ), qsort_desc );
+  for ( i = 0 ; i < QTD_LINHAS ; i++ )
+    padrao = 10 * padrao + linha[i];
+
+  return padrao;
+}
+
+/* A Lotofacil tem 5 colunas: (n-1) % 5
+ * agrupa 1|6|11|16|21, 2|7|12|17|22, 3|8|13|18|23, 4|9|14|19|24, 5|10|15|20|25
+ * Como as contagens sao ordenadas depois, a ordem das colunas nao importa.
+ */
+static uint16_t
+padrao_coluna( const uint8_t *lottery_ticket )
+{
+  uint8_t  i,
+           coluna[QTD_COLUNAS] = { 0 };
+  uint16_t padrao = 0;
+
+
+  for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
+    coluna[ ( lottery_ticket[i] - 1 ) % 5 ]++;
+  qsort( coluna, QTD_COLUNAS, sizeof( coluna[0] ), qsort_desc );
+  for ( i = 0 ; i < QTD_COLUNAS ; i++ )
+    padrao = 10 * padrao + coluna[i];
+
+  return padrao;
+}
+
+
+/* lottery_ticket precisa estar ordenado */
+static uint8_t
+max_seq_sorteados( const uint8_t *lottery_ticket )
+{
+  uint8_t i,
+          seq = 1,
+          max = 1;
+
+
+  for ( i = 1 ; i < QTD_NUM_SORTEADOS ; i++ ) {
+    if ( lottery_ticket[i] == lottery_ticket[i-1] + 1 ) {
+      if ( ++seq > max )
+        max = seq;
+    } else
+      seq = 1;
+  }
+
+  return max;
+}
+
+
+static uint8_t
+max_seq_descartados( const uint8_t *lottery_ticket )
+{
+  bool    drawn[NUM_MAXIMO + 1] = { false };
+  uint8_t i,
+          seq = 0,
+          max = 0;
+
+
+  for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
+    drawn[lottery_ticket[i]] = true;
+  for ( i = NUM_MINIMO ; i <= NUM_MAXIMO ; i++ ) {
+    if ( drawn[i] )
+      seq = 0;
+    else if ( ++seq > max )
+      max = seq;
+  }
+
+  return max;
+}
+
+
+static void
+calc_stats( node_T *node, const concurso_T *uc )
+{
+  stats_T       *s = &node->st;
+  const uint8_t *lt = node->a_lt;  /* precisa estar ordenado */
+  uint8_t        i;
+
+  s->soma = 0;
+  s->mask = 0;
+  for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ ) {
+    s->soma += lt[i];
+    s->mask |= UINT32_C(1) << lt[i];
+  }
+  s->pares     = conta_pares( lt );
+  s->primos    = conta_primos( lt );
+  s->repetidos = conta_repetidos_uc( lt, uc );
+  s->linha     = padrao_linha( lt );
+  s->coluna    = padrao_coluna( lt );
+  s->seq_sort  = max_seq_sorteados( lt );
+  s->seq_desc  = max_seq_descartados( lt );
+}
+
+
+/* true se a combinacao passa em todos os filtros (usa apenas node->st) */
+static bool
+ticket_ok( const node_T *node, const param_T *p )
+{
+  const stats_T *s = &node->st;
+
+  if ( ( p->p6 || p->p7 || p->p8 || p->p9 ) &&
+       !( ( p->p6 && s->pares == 6 ) || ( p->p7 && s->pares == 7 ) ||
+          ( p->p8 && s->pares == 8 ) || ( p->p9 && s->pares == 9 ) ) )
+    return false;
+
+  if ( p->ultimo_concurso != NULL &&
+       ( ( p->a7  && s->repetidos ==  7 ) || ( p->a8  && s->repetidos ==  8 ) ||
+         ( p->a9  && s->repetidos ==  9 ) || ( p->a10 && s->repetidos == 10 ) ||
+         ( p->a11 && s->repetidos == 11 ) ) == false )
+    return false;
+
+  if ( p->soma_min > 0 && s->soma < p->soma_min )
+    return false;
+  if ( p->soma_max > 0 && s->soma > p->soma_max )
+    return false;
+
+  /* todos os fixos precisam estar na combinacao */
+  if ( ( s->mask & p->mask_fixos ) != p->mask_fixos )
+    return false;
+  /* nenhum descartado pode estar na combinacao */
+  if ( ( s->mask & p->mask_descartados ) != 0 )
+    return false;
+
+  if ( p->seq_min_sorteados > 0 && s->seq_sort < p->seq_min_sorteados )
+    return false;
+  if ( p->seq_min_descartados > 0 && s->seq_desc < p->seq_min_descartados )
+    return false;
+
+  if ( p->primo_min != UNDEFINED_VALUE && s->primos < p->primo_min )
+    return false;
+  if ( p->primo_max != UNDEFINED_VALUE && s->primos > p->primo_max )
+    return false;
+
+  if ( ( p->dl43332 || p->dl44322 || p->dl44331 || p->dl53322 || p->dl54321 ) &&
+       !( ( p->dl43332 && s->linha == 43332 ) ||
+          ( p->dl44322 && s->linha == 44322 ) ||
+          ( p->dl44331 && s->linha == 44331 ) ||
+          ( p->dl53322 && s->linha == 53322 ) ||
+          ( p->dl54321 && s->linha == 54321 ) ) )
+    return false;
+
+  if ( ( p->dc43332 || p->dc44322 || p->dc44331 || p->dc53322 || p->dc54321 ) &&
+       !( ( p->dc43332 && s->coluna == 43332 ) ||
+          ( p->dc44322 && s->coluna == 44322 ) ||
+          ( p->dc44331 && s->coluna == 44331 ) ||
+          ( p->dc53322 && s->coluna == 53322 ) ||
+          ( p->dc54321 && s->coluna == 54321 ) ) )
+    return false;
+
+  return true;
+}
+
+
+static void
+print_node( const node_T *node, const param_T *p )
+{
+  uint8_t        i;
+  const stats_T *s = &node->st;
+
+  for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
+    printf( i > 0 ? " %02d" : "%02d", node->a_lt[i] );
+
+  if ( p->verbose == true ) {
+    printf( "   Soma=%d  Pares=%02d  Impares=%02d  Primos=%d",
+            s->soma, s->pares, QTD_NUM_SORTEADOS - s->pares, s->primos );
+    if ( p->ultimo_concurso != NULL )
+      printf( "  Rep=%d", s->repetidos );
+    printf( "  L=%d  C=%d  SeqS=%d  SeqNS=%d",
+            s->linha, s->coluna, s->seq_sort, s->seq_desc );
+  }
+  printf( "\n" );
+}
+
+
+static void
+print_list( const node_T *head, const param_T *p )
+{
+  const node_T *current = head;
 
   while ( current != NULL ) {
-    for ( i=0; i<QTD_NUM_SORTEADOS; i++ ) {
-      printf( "%02d", current->a_lottery_ticket[i] );
-      soma += current->a_lottery_ticket[i];
-      if (i != (QTD_NUM_SORTEADOS-1)) {
-        printf( " " );
-      }
-    }
-    printf("    Soma = %d\n", soma);
-    soma = 0;
+    print_node( current, p );
     current = current->next;
   }
 }
@@ -198,31 +456,6 @@ pop_by_index( node_T **head, uint8_t index )
 */
 
 static void
-pop_by_node( node_T **head, node_T *node_to_pop )
-{
-    node_T *current = *head;
-    node_T *next_node = NULL;
-
-    if ( (*head) == node_to_pop ) {
-      pop_head_node(head);
-      return;
-    }
-
-    while ( current->next != node_to_pop ) {
-      /* return without deleting de node - index out of range */
-      if (current->next == NULL) {
-        return;
-      }
-      current = current->next;
-    }
-    
-    next_node = current->next;
-    current->next = next_node->next;
-    free(next_node);
-}
-
-
-static void
 free_list( node_T **head )
 {
   while ( *head != NULL ) {
@@ -235,7 +468,7 @@ static node_T*
 create_node( void )
 {
   node_T * new_node = NULL;
-  new_node = calloc( 1, sizeof( node_T ) );
+  new_node = calloc( 1, sizeof( *new_node ) );
   if (new_node == NULL) {
     perror("create_node(): cannot alocate memory!");
     exit(1);
@@ -249,7 +482,7 @@ create_clean_node()
 {
   node_T *new_node = create_node();
 
-  memset( new_node, 0, sizeof( node_T ) );
+  memset( new_node, 0, sizeof( *new_node ) );
 
   return new_node;
 }
@@ -265,16 +498,15 @@ push_node_end( node_T **head, node_T *tmp_node, const bool unique_combination )
   /* percorre toda a lista; compara inclusive o ultimo no */
   while ( current != NULL ) {
     if ( unique_combination &&
-         memcmp( current->a_lottery_ticket, tmp_node->a_lottery_ticket,
-                 sizeof( current->a_lottery_ticket ) ) == 0 )
+         memcmp( current->a_lt, tmp_node->a_lt, sizeof( current->a_lt ) ) == 0 )
       return false;               /* duplicata: nao insere */
     last    = current;
     current = current->next;
   }
 
   node_T *new_node = create_node();   /* calloc: next ja vem NULL */
-  memcpy( new_node->a_lottery_ticket, tmp_node->a_lottery_ticket,
-          sizeof( new_node->a_lottery_ticket ) );
+  memcpy( new_node->a_lt, tmp_node->a_lt, sizeof( new_node->a_lt ) );
+  new_node->st = tmp_node->st;
 
   if ( last == NULL )
     *head = new_node;             /* lista vazia */
@@ -282,444 +514,6 @@ push_node_end( node_T **head, node_T *tmp_node, const bool unique_combination )
     last->next = new_node;
 
   return true;
-}
-
-
-static bool
-somatorio_minimo_ok( node_T *current, uint16_t *min )
-{
-  uint8_t uc;
-  uint16_t soma = 0;
-
-  for (uc=0; uc<QTD_NUM_SORTEADOS; uc++)
-    soma += current->a_lottery_ticket[uc];
-  
-  return ( soma >= *min ) ;
-}
-
-static bool
-somatorio_maximo_ok( node_T *current, uint16_t *max )
-{
-  uint8_t uc;
-  uint16_t soma = 0;
-
-  for ( uc=0 ; uc < QTD_NUM_SORTEADOS; uc++ )
-    soma += current->a_lottery_ticket[uc];
-  
-  return ( soma <= *max );
-}
-
-
-static bool
-numeros_repetidos_concurso_anterior_ok( node_T *current, param_T *p )
-{
-  uint8_t uc1,
-          uc2,
-          num_repetidos = 0;
-
-
-  for (uc1 = 0 ; uc1 < QTD_NUM_SORTEADOS ; uc1++ )
-    for (uc2 = 0 ; uc2 < QTD_NUM_SORTEADOS ; uc2++ )
-      if ( current->a_lottery_ticket[uc1] ==
-           (p->ultimo_concurso).a_dezenas[uc2] ) {
-        num_repetidos++;
-        break;
-      }
-    
-  return ( ( ( p->a7 )  && ( num_repetidos == 7 ) )  ||
-           ( ( p->a8 )  && ( num_repetidos == 8 ) )  ||
-           ( ( p->a9 )  && ( num_repetidos == 9 ) )  ||
-           ( ( p->a10 ) && ( num_repetidos == 10 ) ) ||
-           ( ( p->a11 ) && ( num_repetidos == 11 ) ) );
-}
-
-
-static bool
-numero_par_ok( node_T *current, param_T *p )
-{
-  uint8_t uc,
-          even = 0;
-
-  for ( uc=0 ; uc < QTD_NUM_SORTEADOS ; uc++ )
-    if ( current->a_lottery_ticket[uc] % 2 == 0 )
-      even++;
-
-  return ( ( ( p->p6 ) && ( even == 6 ) ) ||
-           ( ( p->p7 ) && ( even == 7 ) ) ||
-           ( ( p->p8 ) && ( even == 8 ) ) ||
-           ( ( p->p9 ) && ( even == 9 ) ) );
-}
-
-
-static bool
-filter_fixo( node_T *current, uint8_t *a_fixos )
-{
-  uint8_t i,
-          j;
-  size_t arr_len = strlen((char*)a_fixos);
-  bool r = false;
-  bool arr_check[NUM_MAX_FIXOS] = {false};
-
-  if ( arr_len == 0 )
-    return false;
-
-  for ( i = 0; i < arr_len; i++ ) {
-    for ( j = 0; j < QTD_NUM_SORTEADOS; j++ )
-      if ( current->a_lottery_ticket[j] == a_fixos[i] ) {
-        arr_check[i] = true;
-        break;
-      }
-  }
-
-  for ( i = 0; i < arr_len; i++ )
-    if ( arr_check[i] == false ) {
-      r = true;
-      break;
-    }
-  
-  return r;  
-}
-
-
-static bool
-filter_descartado( node_T *current, uint8_t *a_descartados )
-{
-  uint8_t i,
-          j;
-  size_t arr_len = strlen((char*)a_descartados);
-  bool r = false;
-  bool arr_check[NUM_MAX_DESCARTADOS] = {false};
-  
-  if ( arr_len == 0 )
-    return false;
-
-  for ( i = 0 ; i < arr_len ; i++ ) {
-    for ( j = 0; j < QTD_NUM_SORTEADOS; j++ )
-      if ( current->a_lottery_ticket[j] == a_descartados[i] ) {
-        arr_check[i] = true;
-        break;
-      }
-  }
-
-  for ( i=0 ; i < arr_len; i++ )
-    if ( arr_check[i] ) {
-      r = true;
-      break;
-    }
-  
-  return r;
-}
-
-
-static bool
-seq_min_sorteados_ok( node_T *current, uint8_t *seq_min_sorteados )
-{
-  uint8_t uc,
-          seq = 1, // contador da sequencia - inicializa-se com 1 pois sempre ha 1 seq de um numero. Ex: 02 04 06
-          anterior = 0; // numero anterior para calculo da sequencia
-  bool seq_ok = false;
-                
-  for ( uc=0 ; uc < QTD_NUM_SORTEADOS; uc++ ) {
-    if ( anterior > 0 ) {
-      if ( ( anterior + 1 ) == current->a_lottery_ticket[uc] ) {
-        if ( ++seq == *seq_min_sorteados ) {
-          seq_ok = true;
-          break;
-        }
-      } else {
-        seq = 1; // reinicia a sequencia
-      }
-    }
-    anterior = current->a_lottery_ticket[uc];
-  }
-  
-  return seq_ok;
-}
-
-
-static bool
-seq_min_descartados_ok( node_T *current, uint8_t *seq_min_descartados )
-{
-  uint8_t uc,
-          seq = 0; // contador da sequencia
-  bool arr_check[NUM_MAXIMO] = {false};
-  bool seq_ok = false;
-                
-  // inicializa o array com os numeros em suas respectivas posicoes
-  // pois o calculo da sequencia dos descartados sera feito nesta base
-  for (uc=0; uc<QTD_NUM_SORTEADOS; uc++)
-    arr_check[current->a_lottery_ticket[uc]-1] =
-      current->a_lottery_ticket[uc];
-
-  if ( arr_check[0] == 0 )
-    seq++;
-  for ( uc=1; uc < (sizeof(arr_check)/sizeof(arr_check[0])); uc++ ) {
-    // se uc>0, já posso usar a referencia uc-1 no array
-    if ( arr_check[uc-1] > 0 )
-      seq = 0;
-
-    if ( arr_check[uc] == 0 )
-      seq++;
-
-    if ( seq >= *seq_min_descartados ) {
-      seq_ok = true;
-      break;
-    }
-  }
-
-  return seq_ok;
-}
-
-
-static bool
-is_prime( uint8_t num )
-{
-  uint8_t i;
-
-
-  if ( num == 1 )
-    return false;
-  if ( ((num % 2) == 0) && (num > 2) )
-    return false;
-  for ( i = 3 ; i < num / 2 ; i+= 2 ) {
-    if ( ( num % i ) == 0 )
-      return false;
-  }
-  return true;
-}
-
-static bool
-qtd_primo_ok( node_T *current, param_T *p )
-{
-  uint8_t uc,
-          primo = 0;
-
-  for ( uc=0 ; uc < QTD_NUM_SORTEADOS ; uc++ )
-    if ( is_prime( current->a_lottery_ticket[uc] ) )
-      primo++;
-
-  return ( ( ( p->r4 ) && ( primo == 4 ) ) ||
-           ( ( p->r5 ) && ( primo == 5 ) ) ||
-           ( ( p->r6 ) && ( primo == 6 ) ) ||
-           ( ( p->r7 ) && ( primo == 7 ) ) );
-}
-
-
-static bool
-distribuicao_linha_ok( node_T *current, param_T *p )
-{
-  uint16_t padrao = 0;
-  uint8_t  uc,
-           linha[QTD_LINHAS] = { 0 }; // A lotofacil possui 5 linhas: 1..5, 6..10, 11..15, 16..20 e 21..25
-
-                
-  for ( uc=0 ; uc < QTD_NUM_SORTEADOS ; uc++ ) {
-    if ( ( current->a_lottery_ticket[uc] < NUM_MINIMO ) ||
-         ( current->a_lottery_ticket[uc] > NUM_MAXIMO ) ) {
-      printf( "Invalid range in function 'distribuicao_linha_ok'.\n\n" );
-      exit(1);
-    }
-    linha[(current->a_lottery_ticket[uc]-1)/5]++; // armazena em grupos de 5 em 5, comecando pelo index 0. Dai o uso do -1.
-  }
-
-  qsort( linha, QTD_LINHAS, sizeof(linha[0]), qsort_desc );
-
-  // Esta transformacao so funciona para array com inteiros de 1 digito E
-  // o numero inteiro final precisa 'caber' no tipo da variavel padrao.
-  // Neste caso, o valor maximo seria 5 (1 digito).
-  for ( uc = 0 ; uc < QTD_LINHAS ; uc++ )
-    padrao = 10 * padrao + linha[uc];
-  
-  return ( ( ( p->dl43332 ) && ( padrao == 43332 ) ) ||
-           ( ( p->dl44322 ) && ( padrao == 44322 ) ) ||
-           ( ( p->dl44331 ) && ( padrao == 44331 ) ) ||
-           ( ( p->dl53322 ) && ( padrao == 53322 ) ) ||
-           ( ( p->dl54321 ) && ( padrao == 54321 ) ) );
-}
-
-
-static bool
-distribuicao_coluna_ok( node_T *current, param_T *p )
-{
-  uint16_t padrao = 0;
-  uint8_t uc,
-          last_digit,
-           coluna[QTD_COLUNAS] = { 0 }; // A lotofacil sena possui 5 colunas
-
-  // Sempre as colunas terminam com o digito (last_digit):
-  //   * 1a coluna: 1 ou 6
-  //   * 1a coluna: 2 ou 7
-  //   * 1a coluna: 3 ou 8
-  //   * 1a coluna: 4 ou 9
-  //   * 1a coluna: 5 ou 0
-
-  // Este array coluna[5] vai armazenar as seguintes quantidades de ranges de numeros:
-  //    coluna[5] = { 5|10|15|20|25, 1|6|11|16|21, 2|7|12|17|22, 3|8|13|18|23, 4|9|14|19|24 };
-
-  for ( uc=0; uc<QTD_NUM_SORTEADOS; uc++ ) {
-    if ( ( current->a_lottery_ticket[uc] < NUM_MINIMO ) ||
-         ( current->a_lottery_ticket[uc] > NUM_MAXIMO ) ) {
-      printf( "Invalid range in function 'distribuicao_coluna_ok'.\n\n" );
-      exit(1);
-    }
-    last_digit = current->a_lottery_ticket[uc] % 10;
-    if ( last_digit > 4 )
-      last_digit = last_digit - 5; // Diminui 5 para ficar entre 0 e 4, indexes do array
-    coluna[last_digit]++;
-  }
-
-  qsort( coluna, QTD_COLUNAS, sizeof(coluna[0]), qsort_desc );
-
-  // Esta transformacao so funciona para array com inteiros de 1 digito E
-  // o numero inteiro final precisa 'caber' no tipo da variavel padrao.
-  // Neste caso, o valor maximo seria 5 (1 digito).
-  for (uc = 0; uc < QTD_COLUNAS; uc++)
-    padrao = 10 * padrao + coluna[uc];
-  
-  return ( ( ( p->dc43332 ) && ( padrao == 43332 ) ) ||
-           ( ( p->dc44322 ) && ( padrao == 44322 ) ) ||
-           ( ( p->dc44331 ) && ( padrao == 44331 ) ) ||
-           ( ( p->dc53322 ) && ( padrao == 53322 ) ) ||
-           ( ( p->dc54321 ) && ( padrao == 54321 ) ) );
-}
-
-
-static void
-filter_list( node_T **head, param_T *p )
-{
-  node_T *current;
-
-  if ( (p->p6) || (p->p7) || (p->p8) || (p->p9) ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( numero_par_ok( current, p ) == false ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-
-  if ( (p->a7) || (p->a8) || (p->a9) || (p->a10) || (p->a11) ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( numeros_repetidos_concurso_anterior_ok( current, p ) == false ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-    
-  if ( p->soma_min > 0 ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( somatorio_minimo_ok( current, &(p->soma_min) ) == false ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-
-  if ( p->soma_max > 0 ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( somatorio_maximo_ok( current, &(p->soma_max) ) == false ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-  
-  if ( strlen((char*)p->a_fixos) > 0 ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( filter_fixo( current, p->a_fixos ) ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-
-  if ( strlen((char*)p->a_descartados) > 0 ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( filter_descartado( current, p->a_descartados ) ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-
-  if ( p->seq_min_sorteados > 0 ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( seq_min_sorteados_ok( current, &(p->seq_min_sorteados) ) == false ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-
-  if ( p->seq_min_descartados > 0 ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( seq_min_descartados_ok( current, &(p->seq_min_descartados) ) == false ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-
-  if ( (p->r4) || (p->r5) || (p->r6) || (p->r7) ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( qtd_primo_ok( current, p ) == false ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-
-  if ( (p->dl43332) || (p->dl44322) || (p->dl44331) || (p->dl53322) || (p->dl54321) ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( distribuicao_linha_ok( current, p ) == false ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
-
-  if ( (p->dc43332) || (p->dc44322) || (p->dc44331) || (p->dc53322) || (p->dc54321) ) {
-    current = *head;
-    while ( current != NULL ) {
-      if ( distribuicao_coluna_ok( current, p ) == false ) {
-        pop_by_node( head, current );
-        current = *head;
-      } else {
-        current = current->next;
-      }
-    }
-  }
 }
 
 
@@ -810,6 +604,8 @@ parse_line( char *line, node_T *node )
         tok = strtok_r( NULL, " \t\r\n", &save ) ) {
     if ( cnt >= QTD_NUM_SORTEADOS )
       return LINE_FORMAT;
+    if ( isdigit( (unsigned char)*tok ) == 0 )   /* rejeita +1, -1, etc */
+      return LINE_FORMAT;
     errno = 0;
     v = strtol( tok, &end, 10 );
     if ( errno == ERANGE || ( errno == 0 && *end == '\0' &&
@@ -820,7 +616,7 @@ parse_line( char *line, node_T *node )
     if ( seen[v] )
       return LINE_DUP;
     seen[v] = true;
-    node->a_lottery_ticket[cnt++] = (uint8_t)v;
+    node->a_lt[cnt++] = (uint8_t)v;
   }
   return cnt == QTD_NUM_SORTEADOS ? LINE_OK : LINE_FORMAT;
 }
@@ -832,6 +628,7 @@ parse_ulong( const char *s, unsigned long min, unsigned long max,
 {
   char *end;
   unsigned long v;
+
 
   if ( s == NULL || isdigit( (unsigned char)*s ) == 0 )
     return false;
@@ -866,7 +663,8 @@ print_help( const char *argv0 )
   fprintf( stderr,
            "\n[ERRO] Gerador de numeros da " NOM
            ": Numero de parametros invalidos!\n\n"
-           "Uso: %s [FILTRO] -n[numero combinacoes randomicas]|[arq matriz]\n\n"
+           "Uso: %s [FILTRO] [-v] -n[numero combinacoes randomicas]|[arq matriz]\n\n"
+           "  -v, mostra as estatisticas de cada combinacao (soma, pares, primos, ...)\n\n"
            "Onde [FILTRO]:\n"
            "  -p <quantidade de pares>\n"
            "     Exemplo: -p7, filtra por 7 pares (e 8 impares)\n"
@@ -884,52 +682,58 @@ print_help( const char *argv0 )
            "  -x<max>, soma MAXIMA de todos os numeros (%d a %d)\n"
            "    * Estatisticamente, recomanda-se <min> = 184 e <max> = 199\n"
            "      O valor medio e 195.\n"
-           "  -f<numero fixo>, fixa um numero nos jogos\n"
+           "  -f<numero fixo>, fixa um numero na combinacao\n"
            "    * Obs: o numero maximo de fixos e %d.\n"
-           "  -d<numero descartado>, descarta um numero nos jogos\n"
+           "  -d<numero descartado>, descarta um numero na combinacao\n"
            "    * Obs: o numero maximo de descartados e %d.\n"
-           "  -l<distribuicao>, Distribuicao dos Numeros nas Linhas\n"
+           "  -l<distribuicao>, Distribuicao dos Numeros nas Linhas em ordem decrescente\n"
            "    Possiveis valores para <distribuicao>:\n"
            "      * 43332\n"
            "      * 44322\n"
            "      * 44331\n"
            "      * 53322\n"
            "      * 54321\n"
-           "  -c<distribuicao>, Distribuicao dos Numeros nas Colunas\n"
+           "  -c<distribuicao>, Distribuicao dos Numeros nas Colunas em ordem decrescente\n"
            "    Possiveis valores para <distribuicao>:\n"
            "      * 43332\n"
            "      * 44322\n"
            "      * 44331\n"
            "      * 53322\n"
            "      * 54321\n"
-           "  -s<seq minimo> (2 a %d), filtra por uma sequencia minima de numeros sorteados.\n"
+           "  -s<seq minimo S> (2 a %d), filtra por uma sequencia minima de numeros sorteados.\n"
            "    * Exemplo: a combinacao ...02 04 06 07 08 09 13 14...\n"
            "      possui uma sequencia minima de 4 numeros sorteados  (06 07 08 e 09).\n"
            "      Neste caso, o parametro para filtro seria '-s4'.\n"
            "      Um bom parametro para o filtro seria '-s4' ou '-s5'.\n"
-           "  -e<seq minimo> (2 a %d), filtra por uma sequencia minima de numeros nao sorteados.\n"
+           "  -e<seq minimo NS> (2 a %d), filtra por uma sequencia minima de numeros NAO sorteados.\n"
            "    * Exemplo: a combinacao ...02 04 06 07 08 09 13 14...\n"
            "      possui uma sequencia minima de 3 numeros nao sorteados (10 11 e 12).\n"
            "      Neste caso, o parametro para filtro seria '-e3'.\n"
            "      Um bom parametro para o filtro seria '-e3' ou '-e4'.\n"
-           "  -r<qtd primos>, filtra por uma quantidade de numeros primos no sorteio.\n"
-           "    * Obs: Possiveis valores para os parametros: -r4 -r5 -r6 -r7\n"
+           "  -r<qtd MINIMA primos>, filtra por uma quantidade MINIMA de numeros primos no sorteio.\n"
+           "    * Obs: Valores permitidos: -r1 ate -r%d\n"
            "      Possiveis numeros primos para LF: 2, 3, 5, 7, 11, 13, 17, 19, 23\n"
-           "      Estatisticamente, recomanda-se, em media, o uso de '-r5'\n\n",
+           "      Estatisticamente, recomanda-se, em media, o uso de '-r5'\n"
+           "  -m<qtd MAXIMA primos>, filtra por uma quantidade MAXIMA de numeros primos no sorteio.\n"
+           "    * Obs: Valores permitidos: -m0 ate -m%d (-m0 -nenhum primo- é possível!)\n\n",
            argv0,
-           SOMA_MIN, SOMA_MAX,            /* -i */
-           SOMA_MIN, SOMA_MAX,            /* -x */
-           NUM_MAX_FIXOS,                 /* -f */
-           NUM_MAX_DESCARTADOS,           /* -d */
-           QTD_NUM_SORTEADOS,             /* -s */
-           QTD_NUM_NAO_SORTEADOS );       /* -e */
+           SOMA_MIN, SOMA_MAX,         /* -i */
+           SOMA_MIN, SOMA_MAX,         /* -x */
+           NUM_MAX_FIXOS,              /* -f */
+           NUM_MAX_DESCARTADOS,        /* -d */
+           QTD_NUM_SORTEADOS,          /* -s */
+           QTD_NUM_NAO_SORTEADOS,      /* -e */
+           LF_MAX_PRIME,               /* -r */
+           LF_MAX_PRIME );             /* -m */
 }
 
 
 int
 main( int argc, char **argv )
 {
-  static param_T  p;
+  static concurso_T ultimo_concurso;
+  static param_T  p = { .primo_min = UNDEFINED_VALUE,
+                        .primo_max = UNDEFINED_VALUE };
   static node_T  *head = NULL, /* Declare the head of the list.
                                   The head is used as a reference for all
                                   functions. */
@@ -937,13 +741,10 @@ main( int argc, char **argv )
   FILE           *fp;
   char           str[ MAX_LINE ];
   int            rc;  // return code
-  uint8_t        c;   // contador do array de inteiros
   uint64_t       usi = 0,
                  total_possivel;
   unsigned long  ul;
   int            caractere;
-  size_t         nf,
-                 nd;
 
 
   if ( argc < 2 ) {
@@ -951,12 +752,25 @@ main( int argc, char **argv )
     return 1;
   }
 
-  //memset( &p, 0, sizeof( param_T ) ); // retirado. p eh static
+  //memset( &p, 0, sizeof( *p ) ); // retirado. p eh static
   opterr = 0;
 
-  while ( ( caractere = getopt( argc, argv,
-                                "p:a:i:x:f:d:l:c:s:e:r:n:" ) ) != -1 ) {
+  while ( ( caractere = getopt( argc, argv, "vn:p:a:i:x:f:d:l:c:s:e:r:m:" ) ) !=
+                                                               UNDEFINED_VALUE )
+  {
     switch ( caractere ) {
+      case 'v': p.verbose = true;
+        break;
+      case 'n':
+        if ( parse_ulong( optarg, 1, MAX_COMB, &ul ) == false ) {
+          fprintf( stderr,
+                   "\nERRO! Parametro de combinacoes randomicas '-n%s' "
+                   "invalido!\n\n",
+                   optarg );
+          return 1;
+        }
+        p.qtd_comb_randomicas = (uint64_t)ul;
+        break;
       case 'p':
         if ( parse_ulong( optarg, 6, 9, &ul ) == false ) {
           fprintf( stderr,
@@ -972,7 +786,7 @@ main( int argc, char **argv )
         }
         break;
       case 'a':
-        if ( !parse_ulong( optarg, 7, 11, &ul ) ) {
+        if ( parse_ulong( optarg, 7, 11, &ul ) == false ) {
           fprintf( stderr,
                    "\nERRO! Parametro \"numeros repetidos do concurso "
                    "anterior\" '-a%s' invalido!\n\n",
@@ -980,11 +794,15 @@ main( int argc, char **argv )
           return 1;
         }
         switch ( ul ) {
-          case  7: p.a7 = true; break;
-          case  8: p.a8 = true; break;
-          case  9: p.a9 = true; break;
+          case  7: p.a7  = true; break;
+          case  8: p.a8  = true; break;
+          case  9: p.a9  = true; break;
           case 10: p.a10 = true; break;
           case 11: p.a11 = true; break;
+        }
+        if ( p.ultimo_concurso == NULL ) {   /* le o .conf apenas uma vez */
+          read_conf_file( &ultimo_concurso );
+          p.ultimo_concurso = &ultimo_concurso;
         }
         break;
       case 'i':
@@ -1013,17 +831,18 @@ main( int argc, char **argv )
                    optarg, NUM_MINIMO, NUM_MAXIMO );
           return 1;
         }
-        if ( memchr( p.a_fixos, (int)ul, strlen( (char*)p.a_fixos ) ) != NULL ){
+        if ( ( p.mask_fixos & ( UINT32_C(1) << ul ) ) != 0 ) {
           fprintf( stderr, "\nERRO! Numero fixo %lu repetido em -f!\n\n", ul );
           return 1;
         }
-        if ( strlen( (char*)p.a_fixos ) + 1 > NUM_MAX_FIXOS ) {
+        if ( p.qtd_fixos + 1 > NUM_MAX_FIXOS ) {
           fprintf( stderr,
                    "\nERRO! Nao podem existir mais que %d numeros fixos!\n\n",
                    NUM_MAX_FIXOS );
           return 1;
         }
-        p.a_fixos[ strlen( (char*)p.a_fixos ) ] = (uint8_t)ul;
+        p.mask_fixos |= UINT32_C(1) << ul;
+        p.qtd_fixos++;
         break;
       case 'd':
         if ( parse_ulong( optarg, NUM_MINIMO, NUM_MAXIMO, &ul ) == false ) {
@@ -1033,22 +852,21 @@ main( int argc, char **argv )
                    optarg, NUM_MINIMO, NUM_MAXIMO );
           return 1;
         }
-        if ( memchr( p.a_descartados,
-                     (int)ul,
-                     strlen( (char*)p.a_descartados ) ) != NULL ) {
+        if ( ( p.mask_descartados & ( UINT32_C(1) << ul ) ) != 0 ) {
           fprintf( stderr,
                    "\nERRO! Numero descartado %lu repetido em -d!\n\n",
                    ul );
           return 1;
         }
-        if ( strlen( (char*)p.a_descartados ) + 1 > NUM_MAX_DESCARTADOS ) {
+        if ( p.qtd_descartados + 1 > NUM_MAX_DESCARTADOS ) {
           fprintf( stderr,
                    "\nERRO! Nao podem existir mais que %d numeros "
                    "descartados!\n\n",
                    NUM_MAX_DESCARTADOS );
           return 1;
         }
-        p.a_descartados[strlen((char*)p.a_descartados)] = (uint8_t)ul;
+        p.mask_descartados |= UINT32_C(1) << ul;
+        p.qtd_descartados++;
         break;
       case 'l':
         if ( parse_ulong( optarg, 43332, 54321, &ul ) == false ) {
@@ -1115,44 +933,52 @@ main( int argc, char **argv )
         p.seq_min_descartados = (uint8_t)ul;
         break;
       case 'r':
-        if ( parse_ulong( optarg, 4, 7, &ul ) == false ) {
+        if ( parse_ulong( optarg, 1, LF_MAX_PRIME, &ul ) == false ) {
           fprintf( stderr,
-                   "\nERRO! Parametro de numero primo '-r%s' invalido!\n\n",
+                   "\nERRO! Parametro de numero primo MINIMO "
+                   "'-r%s' invalido!\n\n",
                    optarg );
           return 1;
         }
-        switch ( ul ) {
-          case 4: p.r4 = true; break;
-          case 5: p.r5 = true; break;
-          case 6: p.r6 = true; break;
-          case 7: p.r7 = true; break;
-          default:
-            fprintf( stderr, 
-                     "\nERRO! Parametro de numero primo '-r%s' invalido!\n\n",
-                     optarg );
-            return 1;
+        if ( p.primo_min == UNDEFINED_VALUE )
+          p.primo_min = (int8_t)ul;
+        else {
+          fprintf( stderr,
+                   "\nERRO! Parametro '-%c' precisa ser unico!\n\n",
+                   caractere );
+          return 1;
         }
         break;
-      case 'n':
-        if ( parse_ulong( optarg, 1, MAX_COMB, &ul ) == false ) {
+      case 'm':
+        if ( parse_ulong( optarg, 0, LF_MAX_PRIME, &ul ) == false ) {
           fprintf( stderr,
-                   "\nERRO! Parametro de combinacoes randomicas '-n%s' "
-                   "invalido!\n\n",
+                   "\nERRO! Parametro de numero primo MAXIMO "
+                   "'-m%s' invalido!\n\n",
                    optarg );
           return 1;
         }
-        p.qtd_comb_randomicas = (uint64_t)ul;
+        if ( p.primo_max == UNDEFINED_VALUE )
+          p.primo_max = (int8_t)ul;
+        else {
+          fprintf( stderr,
+                   "\nERRO! Parametro '-%c' precisa ser unico!\n\n",
+                   caractere );
+          return 1;
+        }
         break;
       case '?':
-        if ( ( optopt == 'p' ) || ( optopt == 'a' ) || ( optopt == 'i' ) ||
-             ( optopt == 'x' ) || ( optopt == 'f' ) || ( optopt == 'd' ) ||
-             ( optopt == 'l' ) || ( optopt == 'c' ) || ( optopt == 's' ) ||
-             ( optopt == 'e' ) || ( optopt == 'r' ) || ( optopt == 'n' ) )
-          fprintf (stderr, "\nOpcao '-%c' exige um argumento.\n\n", optopt);
-        else if (isprint (optopt))
-          fprintf (stderr, "Unknown option '-%c'.\n", optopt);
+        if ( ( optopt == 'n' ) || ( optopt == 'p' ) || ( optopt == 'a' ) ||
+             ( optopt == 'i' ) || ( optopt == 'x' ) || ( optopt == 'f' ) ||
+             ( optopt == 'd' ) || ( optopt == 'l' ) || ( optopt == 'c' ) ||
+             ( optopt == 's' ) || ( optopt == 'e' ) || ( optopt == 'r' ) ||
+             ( optopt == 'm' ) )
+          fprintf(stderr, "\nOpcao '-%c' exige um argumento.\n\n", optopt );
+        else if ( isprint(optopt) )
+          fprintf( stderr, "Unknown option '-%c'.\n", optopt );
         else
-          fprintf (stderr, "Unknown option character '\\x%x'.\n", optopt);
+          fprintf ( stderr,
+                    "Unknown option character '\\x%x'.\n",
+                    (unsigned)optopt );
         return 1;
       default:
         fprintf( stderr, "\nERRO! Parametro invalido!\n\n" );
@@ -1162,37 +988,38 @@ main( int argc, char **argv )
 
   if ( p.soma_min > 0 && p.soma_max > 0 && p.soma_min > p.soma_max ) {
     fprintf( stderr,
-             "\nERRO! \"-i (%u)\" maior que \"-x (%u)\"!\n\n",
+             "\nERRO! \"-i (%d)\" maior que \"-x (%d)\"!\n\n",
              p.soma_min, p.soma_max );
     return 1;
   }
 
-  for ( c = 0 ; p.a_fixos[c] != 0 ; c++ ) {
-    if ( memchr( p.a_descartados, p.a_fixos[c],
-                 strlen( (char*)p.a_descartados ) ) != NULL ) {
-      fprintf( stderr,
-               "\nERRO! Numero %u esta em -f e em -d!\n\n",
-               p.a_fixos[c] );
-      return 1;
-    }
+  if ( p.primo_min != UNDEFINED_VALUE && p.primo_max != UNDEFINED_VALUE &&
+       p.primo_min > p.primo_max ) {
+    fprintf( stderr,
+             "\nERRO! \"-r (%d)\" maior que \"-m (%d)\"!\n\n",
+             p.primo_min, p.primo_max );
+    return 1;
+  }
+
+  if ( ( p.mask_fixos & p.mask_descartados ) != 0 ) {
+    fprintf( stderr,
+             "\nERRO! Numero %d esta em -f e em -d!\n\n",
+             __builtin_ctz( p.mask_fixos & p.mask_descartados ) );
+    return 1;
   }
 
   if ( p.qtd_comb_randomicas > 0 ) {
-    nf = strlen( (char*)p.a_fixos );
-    nd = strlen( (char*)p.a_descartados );
-    total_possivel = binomial( NUM_MAXIMO - nf - nd, QTD_NUM_SORTEADOS - nf );
+    total_possivel = binomial( NUM_MAXIMO - p.qtd_fixos - p.qtd_descartados,
+                               QTD_NUM_SORTEADOS - p.qtd_fixos );
     if ( p.qtd_comb_randomicas > total_possivel ) {
       fprintf( stderr,
-               "\nERRO! '-n' (%lu) maior que o total de %lu jogos possiveis "
-               "com os parametros \"-f\" e/ou \"-d\" informados!\n\n",
+               "\nERRO! '-n' (%lu) maior que o total de %lu combinacoes "
+               "possiveis com os parametros \"-f\" e/ou \"-d\" informados!\n\n",
                (unsigned long)p.qtd_comb_randomicas,
                (unsigned long)total_possivel );
       return 1;
     }
   }
-
-  if ( p.a7 || p.a8 || p.a9 || p.a10 || p.a11 )
-     read_conf_file(&(p.ultimo_concurso));
 
   tmp_node = create_node();
 
@@ -1208,23 +1035,22 @@ main( int argc, char **argv )
       get_valid_sequence( tmp_node );
       
       // qsort the tmp_node
-      qsort( tmp_node->a_lottery_ticket,
+      qsort( tmp_node->a_lt,
              QTD_NUM_SORTEADOS,
-             sizeof(tmp_node->a_lottery_ticket[0]),
+             sizeof( tmp_node->a_lt[0] ),
              qsort_asc );
 
-      filter_list( &tmp_node, &p );
-      
-      // sequencia com filtro invalido
-      if ( tmp_node == NULL )
-        tmp_node = create_node();
-      else {
-        // testa se esta combinacao valida ja existe no array
-        if ( push_node_end( &head, tmp_node, true ) ) {
-          usi++;
-          // imprime na tela essa combinacao valida após encontra-la
-          print_list(tmp_node);
-        }
+      calc_stats( tmp_node, p.ultimo_concurso );
+
+      // combinacao reprovada por algum filtro
+      if ( ticket_ok( tmp_node, &p ) == false )
+        continue;
+
+      // testa se esta combinacao valida ja existe no array
+      if ( push_node_end( &head, tmp_node, true ) ) {
+        usi++;
+        // imprime na tela essa combinacao valida após encontra-la
+        print_node( tmp_node, &p );
       }
     }
   } else {
@@ -1275,16 +1101,17 @@ main( int argc, char **argv )
         return 1;
       }
 
-      qsort( tmp_node->a_lottery_ticket, QTD_NUM_SORTEADOS,
-             sizeof( tmp_node->a_lottery_ticket[0] ), qsort_asc );
-      push_node_end( &head, tmp_node, false );
+      qsort( tmp_node->a_lt, QTD_NUM_SORTEADOS,
+             sizeof( tmp_node->a_lt[0] ), qsort_asc );
+      calc_stats( tmp_node, p.ultimo_concurso );
+      if ( ticket_ok( tmp_node, &p ) )
+        push_node_end( &head, tmp_node, false );
     }
     fclose( fp );
-    filter_list( &head, &p );
-    print_list(head);
+    print_list( head, &p );
   }
-  pop_head_node(&tmp_node);
-  free_list(&head);
+  free( tmp_node );
+  free_list( &head );
 
   return 0;
 }

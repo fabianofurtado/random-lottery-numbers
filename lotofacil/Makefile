@@ -1,5 +1,5 @@
 CC      := gcc
-WARN    := -Wall -Wextra
+WARN    := -Wall -Wextra -Wformat-signedness
 CFLAGS  := $(WARN) -O2
 LDLIBS  := -lconfig
 TARGET  := lf_filter
