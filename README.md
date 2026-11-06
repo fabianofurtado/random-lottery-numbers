@@ -49,8 +49,8 @@ gcc -Wall -Wextra -O2 lf_filter.c -o lf_filter -lconfig
 
 ### Configuration file
 
-The `-a` option compares the combinations with the previous draw, which is read from
-`lf_filter.conf` in the current directory:
+With `-n`, the `-a` option compares the combinations with the previous draw, which is
+read from `lf_filter.conf` in the current directory (the file is read only in this case):
 
 ```
 ultimo_concurso = {
@@ -62,14 +62,20 @@ ultimo_concurso = {
 ### Usage
 
 ```
-./lf_filter [FILTERS] [-v] -n<number of random combinations>
-./lf_filter [FILTERS] [-v] <matrix file>
+./lf_filter [FILTERS] [-v] [-g] [-t] -n<number of random combinations>
+./lf_filter [FILTERS] [-v] [-g] [-t] <matrix file>
 ```
 
 With `-n`, random combinations are generated (the matrix file is ignored). Without
 it, the combinations are read from the matrix file: one combination per line, 15 distinct
 numbers (1..25) separated by spaces. The filters are applied to every combination
 read from the file.
+
+In a matrix file, the "previous draw" of a line is the line before it (the first
+line has 0 repeated numbers), so the order of the lines matters. This is used by
+`-a` and by the `Rep` field of `-v`; `lf_filter.conf` is not read in this mode.
+The previous line is always the previous record of the file, even if it was
+discarded by some filter.
 
 Example `matrix.txt`:
 
@@ -81,16 +87,19 @@ Example `matrix.txt`:
 01 02 03 05 07 09 11 13 15 17 19 21 23 24 25
 ```
 
-Leading zeros are accepted, empty lines are ignored, and the order of the
-numbers in a line does not matter. A line with a wrong count, a repeated
+Numbers may have one or two digits (`1` or `01`) and be separated by spaces and/or
+tabs; leading zeros are accepted, empty lines are ignored (a line can have up to
+255 characters), and the order of the numbers in a line does not matter. A line with a wrong count, a repeated
 number or a number outside 1..25 aborts the program with an error.
 
 | Option | Description | Values |
 |--------|-------------|--------|
 | `-n`   | number of random combinations | 1 ~ 3268760 |
-| `-v`   | versose mode - show the statistics of each combination | (no value) |
+| `-v`   | show the statistics of each combination (no value) | |
+| `-g`   | grid output: every number always in the same column | (no value) | 
+| `-t`   | totals: summary with averages and percentages at the end | (no value) | 
 | `-p`   | number of even numbers | 6 ~ 9 |
-| `-a`   | numbers repeated from the previous draw (needs `lf_filter.conf`) | 7 ~ 11 |
+| `-a`   | numbers repeated from the previous draw (with `-n`: from `lf_filter.conf`; with a matrix file: from the previous line) | 7 ~ 11 |
 | `-i`   | minimum sum | 120 ~ 270 |
 | `-x`   | maximum sum | 120 ~ 270 |
 | `-f`   | fixed number (repeatable) | 1 ~ 25, up to 14 |
@@ -125,6 +134,15 @@ Run without arguments to see the full help.
 
 # same, showing the statistics of each combination
 ./lf_filter -v -p7 -r5 matrix.txt
+
+# only the statistics, without filtering anything
+./lf_filter -v matrix.txt
+
+# only normalize a matrix file to the grid layout
+./lf_filter -g matrix.txt > grid.txt
+
+# statistics of a matrix file (list with statistics + summary at the end)
+./lf_filter -v -t matrix.txt
 ```
 
 ### Output
@@ -134,6 +152,40 @@ One combination per line, in ascending order:
 ```
 02 03 04 06 07 10 11 13 16 17 18 19 21 24 25
 ```
+
+With `-g`, each number always has its own column (`NN` plus one space, 25 slots),
+and numbers that were not drawn are left blank. Without `-v` each line ends at its
+last number; with `-v` the lines are padded to the same length (74 characters) so
+the statistics stay aligned. The output of `-g` can be read back as a matrix file.
+
+```
+01          05 06 07 08 09    11 12 13 14 15 16                22    24 25
+   02 03    05 06             11 12 13 14 15 16             21 22 23 24 25
+01          05 06       09 10    12    14       17 18 19 20 21 22 23    25
+```
+
+With `-t`, a summary of the combinations that were printed is shown after the list
+(here with 40 combinations):
+
+```
+Combinacoes = 40  Soma media = 193.40
+Par        7= 35.00%(14)      8= 30.00%(12)      6= 12.50%( 5)      9= 12.50%( 5)      5=  7.50%( 3)      4=  2.50%( 1)
+Primo      5= 40.00%(16)      6= 30.00%(12)      4= 10.00%( 4)      7= 10.00%( 4)      8=  7.50%( 3)      3=  2.50%( 1)
+Rep        9= 32.50%(13)      8= 22.50%( 9)     10= 17.50%( 7)     11= 15.00%( 6)      7=  7.50%( 3)      0=  2.50%( 1)      6=  2.50%( 1)
+L      43332= 27.50%(11)  44322= 27.50%(11)  44331= 15.00%( 6)  54321= 10.00%( 4)  44421=  5.00%( 2)  53322=  5.00%( 2)
+C      43332= 25.00%(10)  54321= 20.00%( 8)  44322= 17.50%( 7)  44331= 12.50%( 5)  53322=  7.50%( 3)  53331=  7.50%( 3)
+SeqS       4= 27.50%(11)      5= 20.00%( 8)      3= 15.00%( 6)      6= 12.50%( 5)      8= 12.50%( 5)      7= 10.00%( 4)     10=  2.50%( 1)
+SeqNS      3= 42.50%(17)      2= 35.00%(14)      4= 17.50%( 7)      5=  5.00%( 2)
+```
+
+There is one line per group, and the values of each line are sorted by percentage, in
+descending order (ties are listed by value). Each value shows `value=percentage(count)`,
+and the columns are aligned from one line to the next. The groups are: even numbers
+(`Par`), primes (`Primo`), repeated from the previous draw (`Rep`, same rule as in
+`-v`), row patterns (`L`), column patterns (`C`), longest sequence of drawn numbers
+(`SeqS`) and of non-drawn numbers (`SeqNS`). Only the values that occurred are listed,
+and `L` and `C` show only the 6 most frequent patterns. The first line also has the
+average sum. `-t` does not change the list, so it can be combined with `-v` and `-g`.
 
 With `-v`, the statistics of each combination are appended:
 
@@ -146,7 +198,7 @@ With `-v`, the statistics of each combination are appended:
 | `Soma` | sum of the 15 numbers |
 | `Pares` / `Impares` | even / odd numbers |
 | `Primos` | prime numbers |
-| `Rep` | numbers repeated from the previous draw (only shown with `-a`) |
+| `Rep` | numbers repeated from the previous draw: the previous line with a matrix file (0 on the first line), or `lf_filter.conf` with `-n -a` (not shown with `-n` alone) |
 | `L` / `C` | distribution by rows / columns, in descending order (any of the 18 possible patterns, even those not accepted by `-l`/`-c`) |
 | `SeqS` | longest sequence of drawn numbers |
 | `SeqNS` | longest sequence of non-drawn numbers |

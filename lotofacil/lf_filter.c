@@ -12,7 +12,7 @@
  *   gcc -Wall -Wextra -O2 lf_filter.c -o lf_filter -lconfig
  *
  * * * * * * * * * * * * * * * * * * * * * * * 
- * Formato do arquivo lf_filter.conf (exemplo):
+ * Formato do arquivo lf_filter.conf (exemplo; so e lido com "-n" e "-a"):
  * ultimo_concurso = {
  *   numero  = 1780;
  *   dezenas = [3,4,5,6,7,9,10,11,13,14,15,16,17,22,23];
@@ -20,7 +20,17 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * *
  * Historico:
- *   * 2026-11-02 - Inclusao dos parametros "-m" (maximo de primos) e "-v"
+ *   * 2026-11-05 - Inclusao do parametro "-t" (totais: apos a saida mostra a
+ *                  soma media e a porcentagem de cada valor dos filtros,
+ *                  de cada grupo, em ordem decrescente de porcentagem)
+ *                - Inclusao do parametro "-g" (saida em grade: cada numero
+ *                  sempre na mesma coluna, 2 digitos; com "-v" as linhas tem o
+ *                  mesmo tamanho, sem "-v" terminam no ultimo numero)
+ *                - MAX_LINE de 64 para 256 (aceita a propria saida do "-g")
+ *   * 2026-11-02 - Com arquivo matriz, o "concurso anterior" (-a e Rep do -v)
+ *                  e a linha anterior do proprio arquivo; o .conf so e lido
+ *                  com "-n" e "-a"
+ *                - Inclusao dos parametros "-m" (maximo de primos) e "-v"
  *                  (estatisticas de cada combinacao)
  *                - Estatisticas calculadas uma unica vez por combinacao
  *                  (stats_T) e usadas pelos filtros e pela impressao
@@ -56,13 +66,24 @@
 #define NUM_MAX_DESCARTADOS   ( QTD_NUM_NAO_SORTEADOS - 1 )
 #define SOMA_MIN              ( 1+2+3+4+5+6+7+8+9+10+11+12+13+14+15 )
 #define SOMA_MAX              ( 11+12+13+14+15+16+17+18+19+20+21+22+23+24+25 )
-#define MAX_LINE              64
+#define MAX_LINE              256
+#define GRADE_LARGURA         ( NUM_MAXIMO * 3 - 1 ) /* "NN " x 25, sem o ultimo espaco */
 #define MAX_COMB              3268760UL // C(25,15) = C(25,10) =
                                         //                    25!/(15!*(25-15)!)
 #define CONF_FILE             "lf_filter.conf"
 #define LF_MAX_PRIME          9
 #define UNDEFINED_VALUE       -1
+#define QTD_PADROES           18   /* padroes possiveis de linhas/colunas */
 
+#define RES_LARG_VALOR        5    /* largura do valor; cabe um padrao, ex: 43332 */
+#define RES_MAX_PADROES       6    /* L e C: somente os 6 mais frequentes         */
+
+
+typedef struct {
+  uint32_t valor;
+  uint64_t n;
+  size_t   ordem;   /* posicao original, para desempatar */
+} item_T;
 
 typedef struct {
   int numero; /* por questoes de compatibilidade com a libconfig, estou usando
@@ -89,12 +110,26 @@ typedef struct node {
 } node_T;
 
 typedef struct {
+  uint64_t total,
+           soma,
+           pares[QTD_NUM_SORTEADOS + 1],
+           primos[QTD_NUM_SORTEADOS + 1],
+           rep[QTD_NUM_SORTEADOS + 1],
+           seq_s[QTD_NUM_SORTEADOS + 1],
+           seq_ns[QTD_NUM_SORTEADOS + 1],
+           linha[QTD_PADROES],
+           coluna[QTD_PADROES];
+} resumo_T;
+
+typedef struct {
   bool verbose,
+       totais,     /* resumo estatistico no final (-t)      */
+       grade,      /* saida em grade (-g)                   */
+       usa_a,      /* algum "-a" informado                  */
        p6, p7, p8, p9,
        a7, a8, a9, a10, a11,
        dl43332, dl44322, dl44331, dl53322, dl54321,
        dc43332, dc44322, dc44331, dc53322, dc54321;
-  concurso_T *ultimo_concurso; /* algum "-a" informado: le o arquivo .conf */
   uint8_t qtd_fixos,
           qtd_descartados,
           seq_min_sorteados,
@@ -123,6 +158,7 @@ qsort_asc( const void * a, const void * b )
    return ( *(uint8_t*)a - *(uint8_t*)b );
 }
 
+
 static int
 qsort_desc( const void * a, const void * b )
 {
@@ -131,7 +167,7 @@ qsort_desc( const void * a, const void * b )
 
 
 static bool
-is_lf_prime( uint8_t n )
+is_lf_prime( const uint8_t n )
 {
   uint8_t uc;
   const uint8_t lf_prime[LF_MAX_PRIME] = { 2, 3, 5, 7, 11, 13, 17, 19, 23 };
@@ -141,6 +177,7 @@ is_lf_prime( uint8_t n )
     if ( n  == lf_prime[uc] )
       return true;
   }
+
   return false;
 }
 
@@ -206,6 +243,7 @@ conta_repetidos_uc( const uint8_t *lt, const concurso_T *uc )
   uint8_t i,
           n = 0;
 
+
   if ( uc != NULL ) {
     for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
       if ( memchr( uc->a_dezenas, lt[i], QTD_NUM_SORTEADOS ) != NULL )
@@ -232,6 +270,7 @@ padrao_linha( const uint8_t *lottery_ticket )
 
   return padrao;
 }
+
 
 /* A Lotofacil tem 5 colunas: (n-1) % 5
  * agrupa 1|6|11|16|21, 2|7|12|17|22, 3|8|13|18|23, 4|9|14|19|24, 5|10|15|20|25
@@ -305,6 +344,7 @@ calc_stats( node_T *node, const concurso_T *uc )
   const uint8_t *lt = node->a_lt;  /* precisa estar ordenado */
   uint8_t        i;
 
+
   s->soma = 0;
   s->mask = 0;
   for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ ) {
@@ -327,12 +367,13 @@ ticket_ok( const node_T *node, const param_T *p )
 {
   const stats_T *s = &node->st;
 
+
   if ( ( p->p6 || p->p7 || p->p8 || p->p9 ) &&
        !( ( p->p6 && s->pares == 6 ) || ( p->p7 && s->pares == 7 ) ||
           ( p->p8 && s->pares == 8 ) || ( p->p9 && s->pares == 9 ) ) )
     return false;
 
-  if ( p->ultimo_concurso != NULL &&
+  if ( p->usa_a == true &&
        ( ( p->a7  && s->repetidos ==  7 ) || ( p->a8  && s->repetidos ==  8 ) ||
          ( p->a9  && s->repetidos ==  9 ) || ( p->a10 && s->repetidos == 10 ) ||
          ( p->a11 && s->repetidos == 11 ) ) == false )
@@ -380,34 +421,224 @@ ticket_ok( const node_T *node, const param_T *p )
 }
 
 
+/* todos os padroes possiveis de linhas/colunas (15 numeros em 5 grupos de 5) */
+static const uint16_t padroes[QTD_PADROES] = {
+  33333, 43332, 44322, 44331, 44421, 44430, 53322, 53331, 54222,
+  54321, 54330, 54411, 54420, 55221, 55311, 55320, 55410, 55500
+};
+
+
+static size_t
+idx_padrao( const uint16_t padrao )
+{
+  size_t i;
+
+
+  for ( i = 0 ; i < QTD_PADROES ; i++ )
+    if ( padroes[i] == padrao )
+      return i;
+
+  return QTD_PADROES;   /* nao existe */
+}
+
+
 static void
-print_node( const node_T *node, const param_T *p )
+resumo_add( resumo_T *r, const stats_T *s )
+{
+  size_t k;
+
+
+  r->total++;
+  r->soma += s->soma;
+  r->pares[s->pares]++;
+  r->primos[s->primos]++;
+  r->rep[s->repetidos]++;
+  r->seq_s[s->seq_sort]++;
+  r->seq_ns[s->seq_desc]++;
+  if ( ( k = idx_padrao( s->linha ) ) < QTD_PADROES )
+    r->linha[k]++;
+  if ( ( k = idx_padrao( s->coluna ) ) < QTD_PADROES )
+    r->coluna[k]++;
+}
+
+
+/* maior quantidade primeiro; em empate, mantem a ordem original (valor) */
+static int
+qsort_item( const void *a, const void *b )
+{
+  const item_T *x = a,
+               *y = b;
+
+
+  if ( x->n != y->n )
+    return x->n < y->n ? 1 : -1;
+
+  return x->ordem < y->ordem ? -1 : ( x->ordem > y->ordem );
+}
+
+
+/* "Rep" eh mostrado no modo matriz (sempre) e no modo -n (so com -a) */
+static bool
+mostra_rep( const param_T *p )
+{
+  return p->usa_a == true || p->qtd_comb_randomicas == 0;
+}
+
+
+/* O retorno precisa ser int por causa do format string, mais especificamente,
+   especificador de largura dinâmica * do printf espera um argumento int. */
+static int
+digitos( uint64_t v )
+{
+  int d = 1;
+
+
+  while ( v >= 10 ) {
+    v /= 10;
+    d++;
+  }
+
+  return d;
+}
+
+
+/* ordena os itens por porcentagem (decrescente) e imprime uma linha com ate
+   "max" itens, todos com a mesma largura, para as colunas ficarem alinhadas:
+   Par     7=100.00%(1880) */
+static void
+print_linha( const char *nome, item_T *it, const size_t qtd, const size_t max,
+             const uint64_t total )
+{
+  size_t i;
+
+
+  qsort( it, qtd, sizeof( it[0] ), qsort_item );
+  printf( "%-5s", nome );
+  for ( i = 0 ; i < qtd && i < max ; i++ )
+    printf( "  %*u=%6.2f%%(%*lu)", RES_LARG_VALOR, (unsigned)it[i].valor,
+            100.0 * (double)it[i].n / (double)total,
+            digitos( total ), (unsigned long)it[i].n );
+  printf( "\n" );
+}
+
+
+/* um item por valor que ocorreu (o proprio indice e o valor) */
+static void
+print_valores( const char *nome, const uint64_t *cont, const size_t qtd,
+               const uint64_t total )
+{
+  item_T it[QTD_NUM_SORTEADOS + 1];
+  size_t i,
+         k = 0;
+
+
+  for ( i = 0 ; i < qtd && k < sizeof( it ) / sizeof( it[0] ) ; i++ ) {
+    if ( cont[i] == 0 )
+      continue;
+    it[k].valor = (uint32_t)i;
+    it[k].n     = cont[i];
+    it[k].ordem = k;
+    k++;
+  }
+  print_linha( nome, it, k, k, total );
+}
+
+
+/* um item por padrao que ocorreu, so os RES_MAX_PADROES mais frequentes */
+static void
+print_padroes( const char *nome, const uint64_t *cont, const uint64_t total )
+{
+  item_T it[QTD_PADROES];
+  size_t i,
+         k = 0;
+
+
+  for ( i = 0 ; i < QTD_PADROES ; i++ ) {
+    if ( cont[i] == 0 )
+      continue;
+    it[k].valor = padroes[i];
+    it[k].n     = cont[i];
+    it[k].ordem = k;
+    k++;
+  }
+  print_linha( nome, it, k, RES_MAX_PADROES, total );
+}
+
+
+static void
+print_resumo( const resumo_T *r, const bool mostra_rep )
+{
+  printf( "\nCombinacoes = %lu", (unsigned long)r->total );
+  if ( r->total == 0 ) {
+    printf( "\n" );
+    return;
+  }
+
+  printf( "  Soma media = %.2f\n", (double)r->soma / (double)r->total );
+  print_valores( "Par", r->pares, QTD_NUM_SORTEADOS + 1, r->total );
+  print_valores( "Primo", r->primos, QTD_NUM_SORTEADOS + 1, r->total );
+  if ( mostra_rep )
+    print_valores( "Rep", r->rep, QTD_NUM_SORTEADOS + 1, r->total );
+  print_padroes( "L", r->linha, r->total );
+  print_padroes( "C", r->coluna, r->total );
+  print_valores( "SeqS", r->seq_s, QTD_NUM_SORTEADOS + 1, r->total );
+  print_valores( "SeqNS", r->seq_ns, QTD_NUM_SORTEADOS + 1, r->total );
+}
+
+
+static void
+print_node( const node_T *node, const param_T *p, resumo_T *r )
 {
   uint8_t        i;
+  size_t         j;
   const stats_T *s = &node->st;
+  char           grade[ GRADE_LARGURA + 1 ];
 
-  for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
-    printf( i > 0 ? " %02d" : "%02d", node->a_lt[i] );
+
+  if ( p->grade == true ) {
+    /* cada numero n ocupa sempre as posicoes (n-1)*3 e (n-1)*3+1; os que nao
+       foram sorteados ficam em branco. Todas as linhas tem o mesmo tamanho. */
+    memset( grade, ' ', GRADE_LARGURA );
+    grade[ GRADE_LARGURA ] = '\0';
+    for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ ) {
+      grade[ ( node->a_lt[i] - 1 ) * 3 ]     = (char)( '0' + node->a_lt[i] / 10 );
+      grade[ ( node->a_lt[i] - 1 ) * 3 + 1 ] = (char)( '0' + node->a_lt[i] % 10 );
+    }
+    if ( p->verbose == false ) {
+      /* sem -v nao ha nada depois da grade: remove os espacos do final */
+      j = GRADE_LARGURA;
+      while ( j > 0 && grade[ j - 1 ] == ' ' )
+        j--;
+      grade[ j ] = '\0';
+    }
+    fputs( grade, stdout );
+  } else {
+    for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
+      printf( i > 0 ? " %02d" : "%02d", node->a_lt[i] );
+  }
 
   if ( p->verbose == true ) {
     printf( "   Soma=%d  Pares=%02d  Impares=%02d  Primos=%d",
             s->soma, s->pares, QTD_NUM_SORTEADOS - s->pares, s->primos );
-    if ( p->ultimo_concurso != NULL )
+    if ( mostra_rep( p ) == true )
       printf( "  Rep=%d", s->repetidos );
     printf( "  L=%d  C=%d  SeqS=%d  SeqNS=%d",
             s->linha, s->coluna, s->seq_sort, s->seq_desc );
   }
   printf( "\n" );
+  if ( r != NULL )
+    resumo_add( r, s );
 }
 
 
 static void
-print_list( const node_T *head, const param_T *p )
+print_list( const node_T *head, const param_T *p, resumo_T *r )
 {
   const node_T *current = head;
 
+
   while ( current != NULL ) {
-    print_node( current, p );
+    print_node( current, p, r );
     current = current->next;
   }
 }
@@ -430,28 +661,28 @@ pop_head_node( node_T **head )
 
 /*
 static void
-pop_by_index( node_T **head, uint8_t index )
+pop_by_index( node_T **head, const uint8_t index )
 {
-    uint8_t i = 0;
-    node_T * current = *head;
-    node_T * temp_node = NULL;
+  uint8_t i = 0;
+  node_T * current = *head;
+  node_T * temp_node = NULL;
 
-    if ( index == 0 ) {
-      pop_head_node(head);
+  if ( index == 0 ) {
+    pop_head_node(head);
+    return;
+  }
+
+  for ( i = 0; i < index-1; i++ ) {
+    // return without deleting de node - index out of range
+    if ( current->next == NULL ) {
       return;
     }
+    current = current->next;
+  }
 
-    for ( i = 0; i < index-1; i++ ) {
-      // return without deleting de node - index out of range
-      if ( current->next == NULL ) {
-        return;
-      }
-      current = current->next;
-    }
-
-    temp_node = current->next;
-    current->next = temp_node->next;
-    free( temp_node );
+  temp_node = current->next;
+  current->next = temp_node->next;
+  free( temp_node );
 }
 */
 
@@ -467,12 +698,14 @@ free_list( node_T **head )
 static node_T*
 create_node( void )
 {
-  node_T * new_node = NULL;
-  new_node = calloc( 1, sizeof( *new_node ) );
-  if (new_node == NULL) {
+  node_T *new_node;
+
+
+  if ( ( new_node = calloc( 1, sizeof( *new_node ) ) ) == NULL ) {
     perror("create_node(): cannot alocate memory!");
     exit(1);
   }    
+
   return new_node;
 }
 
@@ -494,6 +727,7 @@ push_node_end( node_T **head, node_T *tmp_node, const bool unique_combination )
 {
   node_T *current = *head;
   node_T *last    = NULL;
+
 
   /* percorre toda a lista; compara inclusive o ultimo no */
   while ( current != NULL ) {
@@ -517,9 +751,10 @@ push_node_end( node_T **head, node_T *tmp_node, const bool unique_combination )
 }
 
 
-static void
-read_conf_file( concurso_T *ultimo_concurso )
+static concurso_T
+read_config_file( void )
 {
+  concurso_T        ultimo_concurso;
   uint8_t           c;
   int               num;
   bool              seen[NUM_MAXIMO + 1] = { false }; // index 0 ate 25
@@ -528,12 +763,13 @@ read_conf_file( concurso_T *ultimo_concurso )
                    *dezenas;
   const char       *ef;
 
+
   config_init( &cfg );
 
   if ( config_read_file( &cfg, CONF_FILE ) == CONFIG_FALSE ) {
     ef = config_error_file( &cfg );
     fprintf( stderr,
-             "Erro ao abrir o arquivo \"%s\"!\nDetalhes: %s:%d - %s\n",
+             "ERRO! Abrir o arquivo \"%s\"!\nDetalhes: %s:%d - %s\n",
              CONF_FILE,
              ef ? ef : CONF_FILE,
              config_error_line( &cfg ),
@@ -543,13 +779,13 @@ read_conf_file( concurso_T *ultimo_concurso )
   }
 
   if ( ( setting = config_lookup( &cfg, "ultimo_concurso" ) ) == NULL ) {
-    fprintf( stderr, "Erro! Entrada \"ultimo_concurso\" nao encontrada!\n\n" );
+    fprintf( stderr, "ERRO! Entrada \"ultimo_concurso\" nao encontrada!\n\n" );
     config_destroy( &cfg );
     exit( EXIT_FAILURE );
   }
 
   if ( config_setting_lookup_int( setting, "numero",
-                                  &(ultimo_concurso->numero) ) == CONFIG_FALSE){
+                                  &(ultimo_concurso.numero) ) == CONFIG_FALSE){
     fprintf( stderr, "ERRO! \"numero\" precisa ser definido!\n\n" );
     config_destroy( &cfg );
     exit( EXIT_FAILURE );
@@ -584,10 +820,12 @@ read_conf_file( concurso_T *ultimo_concurso )
       exit( EXIT_FAILURE );
     }
     seen[num] = true;
-    ultimo_concurso->a_dezenas[c] = (uint8_t)num;
+    ultimo_concurso.a_dezenas[c] = (uint8_t)num;
   }
 
   config_destroy( &cfg );
+
+  return ultimo_concurso;
 }
 
 
@@ -623,7 +861,7 @@ parse_line( char *line, node_T *node )
 
 
 static bool
-parse_ulong( const char *s, unsigned long min, unsigned long max,
+parse_ulong( const char *s, const unsigned long min, const unsigned long max,
              unsigned long *out )
 {
   char *end;
@@ -637,22 +875,27 @@ parse_ulong( const char *s, unsigned long min, unsigned long max,
   if ( errno != 0 || *end != '\0' || v < min || v > max )
     return false;
   *out = v;
+
   return true;
 }
 
 
 static uint64_t
-binomial( uint64_t n, uint64_t k )
+binomial( const uint64_t n, uint64_t k )
 {
   uint64_t r = 1,
            i;
 
+
   if ( k > n )
     return 0;
+
   if ( k > n - k )
     k = n - k;
+
   for ( i = 1 ; i <= k ; i++ )
     r = r * ( n - k + i ) / i;   /* divisao sempre exata a cada passo */
+
   return r;
 }
 
@@ -660,91 +903,107 @@ binomial( uint64_t n, uint64_t k )
 static void
 print_help( const char *argv0 )
 {
-  fprintf( stderr,
-           "\n[ERRO] Gerador de numeros da " NOM
-           ": Numero de parametros invalidos!\n\n"
-           "Uso: %s [FILTRO] [-v] -n[numero combinacoes randomicas]|[arq matriz]\n\n"
-           "  -v, mostra as estatisticas de cada combinacao (soma, pares, primos, ...)\n\n"
-           "Onde [FILTRO]:\n"
-           "  -p <quantidade de pares>\n"
-           "     Exemplo: -p7, filtra por 7 pares (e 8 impares)\n"
-           "              -p8, filtra por 8 pares (e 7 impares)\n"
-           "              -p6, filtra por 6 pares (e 9 impares)\n"
-           "              -p9, filtra por 9 pares (e 6 impares)\n"
-           "  -a<quantidade de numeros repetidos do concurso anterior>\n"
-           "     Estatisticamente:\n"
-           "       -a9  = 33.44%%\n"
-           "       -a8  = 25.21%%\n"
-           "       -a10 = 21.14%%\n"
-           "       -a7  =  9.12%%\n"
-           "       -a11 =  8.13%%\n"
-           "  -i<min>, soma MINIMA de todos os numeros (%d a %d)\n"
-           "  -x<max>, soma MAXIMA de todos os numeros (%d a %d)\n"
-           "    * Estatisticamente, recomanda-se <min> = 184 e <max> = 199\n"
-           "      O valor medio e 195.\n"
-           "  -f<numero fixo>, fixa um numero na combinacao\n"
-           "    * Obs: o numero maximo de fixos e %d.\n"
-           "  -d<numero descartado>, descarta um numero na combinacao\n"
-           "    * Obs: o numero maximo de descartados e %d.\n"
-           "  -l<distribuicao>, Distribuicao dos Numeros nas Linhas em ordem decrescente\n"
-           "    Possiveis valores para <distribuicao>:\n"
-           "      * 43332\n"
-           "      * 44322\n"
-           "      * 44331\n"
-           "      * 53322\n"
-           "      * 54321\n"
-           "  -c<distribuicao>, Distribuicao dos Numeros nas Colunas em ordem decrescente\n"
-           "    Possiveis valores para <distribuicao>:\n"
-           "      * 43332\n"
-           "      * 44322\n"
-           "      * 44331\n"
-           "      * 53322\n"
-           "      * 54321\n"
-           "  -s<seq minimo S> (2 a %d), filtra por uma sequencia minima de numeros sorteados.\n"
-           "    * Exemplo: a combinacao ...02 04 06 07 08 09 13 14...\n"
-           "      possui uma sequencia minima de 4 numeros sorteados  (06 07 08 e 09).\n"
-           "      Neste caso, o parametro para filtro seria '-s4'.\n"
-           "      Um bom parametro para o filtro seria '-s4' ou '-s5'.\n"
-           "  -e<seq minimo NS> (2 a %d), filtra por uma sequencia minima de numeros NAO sorteados.\n"
-           "    * Exemplo: a combinacao ...02 04 06 07 08 09 13 14...\n"
-           "      possui uma sequencia minima de 3 numeros nao sorteados (10 11 e 12).\n"
-           "      Neste caso, o parametro para filtro seria '-e3'.\n"
-           "      Um bom parametro para o filtro seria '-e3' ou '-e4'.\n"
-           "  -r<qtd MINIMA primos>, filtra por uma quantidade MINIMA de numeros primos no sorteio.\n"
-           "    * Obs: Valores permitidos: -r1 ate -r%d\n"
-           "      Possiveis numeros primos para LF: 2, 3, 5, 7, 11, 13, 17, 19, 23\n"
-           "      Estatisticamente, recomanda-se, em media, o uso de '-r5'\n"
-           "  -m<qtd MAXIMA primos>, filtra por uma quantidade MAXIMA de numeros primos no sorteio.\n"
-           "    * Obs: Valores permitidos: -m0 ate -m%d (-m0 -nenhum primo- é possível!)\n\n",
-           argv0,
-           SOMA_MIN, SOMA_MAX,         /* -i */
-           SOMA_MIN, SOMA_MAX,         /* -x */
-           NUM_MAX_FIXOS,              /* -f */
-           NUM_MAX_DESCARTADOS,        /* -d */
-           QTD_NUM_SORTEADOS,          /* -s */
-           QTD_NUM_NAO_SORTEADOS,      /* -e */
-           LF_MAX_PRIME,               /* -r */
-           LF_MAX_PRIME );             /* -m */
+  fprintf(
+    stderr,
+    "\n[ERRO] Gerador de numeros da " NOM
+    ": Numero de parametros invalidos!\n\n"
+    "Uso: %s [FILTRO] [-v] [-g] [-t] -n[numero combinacoes randomicas]|[arq matriz]\n\n"
+    "  -v, mostra as estatisticas de cada combinacao (soma, pares, primos, ...)\n"
+    "      Com arquivo matriz, mostra tambem os repetidos da linha anterior.\n"
+    "  -g, saida em grade: cada numero sempre na mesma coluna, com 2 digitos,\n"
+    "      e as nao sorteados em branco. Com -v todas as linhas tem o mesmo\n"
+    "      tamanho; sem -v cada linha termina no ultimo numero.\n"
+    "  -t, no final mostra a soma media e a porcentagem (e a quantidade) de cada\n"
+    "      valor de pares, primos, repetidos, linhas, colunas e sequencias,\n"
+    "      uma linha por grupo, em ordem decrescente de porcentagem\n"
+    "      (linhas e colunas: apenas os 6 padroes mais frequentes).\n\n"
+    "Onde [FILTRO]:\n"
+    "  -p <quantidade de pares>\n"
+    "     Exemplo: -p7, filtra por 7 pares (e 8 impares)\n"
+    "              -p8, filtra por 8 pares (e 7 impares)\n"
+    "              -p6, filtra por 6 pares (e 9 impares)\n"
+    "              -p9, filtra por 9 pares (e 6 impares)\n"
+    "  -a<quantidade de numeros repetidos do concurso anterior>\n"
+    "     Com -n, o concurso anterior e lido de " CONF_FILE ".\n"
+    "     Com arquivo matriz, e a linha anterior do arquivo (a 1a linha\n"
+    "     tem 0 repetidos).\n"
+    "     Estatisticamente:\n"
+    "       -a9  = 33.44%%\n"
+    "       -a8  = 25.21%%\n"
+    "       -a10 = 21.14%%\n"
+    "       -a7  =  9.12%%\n"
+    "       -a11 =  8.13%%\n"
+    "  -i<min>, soma MINIMA de todos os numeros (%d a %d)\n"
+    "  -x<max>, soma MAXIMA de todos os numeros (%d a %d)\n"
+    "    * Estatisticamente, recomanda-se <min> = 184 e <max> = 199\n"
+    "      O valor medio e 195.\n"
+    "  -f<numero fixo>, fixa um numero na combinacao\n"
+    "    * Obs: o numero maximo de fixos e %d.\n"
+    "  -d<numero descartado>, descarta um numero na combinacao\n"
+    "    * Obs: o numero maximo de descartados e %d.\n"
+    "  -l<distribuicao>, Distribuicao dos Numeros nas Linhas em ordem decrescente\n"
+    "    Possiveis valores para <distribuicao>:\n"
+    "      * 43332\n"
+    "      * 44322\n"
+    "      * 44331\n"
+    "      * 53322\n"
+    "      * 54321\n"
+    "  -c<distribuicao>, Distribuicao dos Numeros nas Colunas em ordem decrescente\n"
+    "    Possiveis valores para <distribuicao>:\n"
+    "      * 43332\n"
+    "      * 44322\n"
+    "      * 44331\n"
+    "      * 53322\n"
+    "      * 54321\n"
+    "  -s<seq minimo S> (2 a %d), filtra por uma sequencia minima de numeros sorteados.\n"
+    "    * Exemplo: a combinacao ...02 04 06 07 08 09 13 14...\n"
+    "      possui uma sequencia minima de 4 numeros sorteados  (06 07 08 e 09).\n"
+    "      Neste caso, o parametro para filtro seria '-s4'.\n"
+    "      Um bom parametro para o filtro seria '-s4' ou '-s5'.\n"
+    "  -e<seq minimo NS> (2 a %d), filtra por uma sequencia minima de numeros NAO sorteados.\n"
+    "    * Exemplo: a combinacao ...02 04 06 07 08 09 13 14...\n"
+    "      possui uma sequencia minima de 3 numeros nao sorteados (10 11 e 12).\n"
+    "      Neste caso, o parametro para filtro seria '-e3'.\n"
+    "      Um bom parametro para o filtro seria '-e3' ou '-e4'.\n"
+    "  -r<qtd MINIMA primos>, filtra por uma quantidade MINIMA de numeros primos no sorteio.\n"
+    "    * Obs: Valores permitidos: -r1 ate -r%d\n"
+    "      Possiveis numeros primos para LF: 2, 3, 5, 7, 11, 13, 17, 19, 23\n"
+    "      Estatisticamente, recomanda-se, em media, o uso de '-r5'\n"
+    "  -m<qtd MAXIMA primos>, filtra por uma quantidade MAXIMA de numeros primos no sorteio.\n"
+    "    * Obs: Valores permitidos: -m0 ate -m%d (-m0 -nenhum primo- é possível!)\n\n",
+    argv0,
+    SOMA_MIN, SOMA_MAX,      /* -i */
+    SOMA_MIN, SOMA_MAX,      /* -x */
+    NUM_MAX_FIXOS,           /* -f */
+    NUM_MAX_DESCARTADOS,     /* -d */
+    QTD_NUM_SORTEADOS,       /* -s */
+    QTD_NUM_NAO_SORTEADOS,   /* -e */
+    LF_MAX_PRIME,            /* -r */
+    LF_MAX_PRIME             /* -m */
+  );
 }
 
 
 int
 main( int argc, char **argv )
 {
-  static concurso_T ultimo_concurso;
-  static param_T  p = { .primo_min = UNDEFINED_VALUE,
-                        .primo_max = UNDEFINED_VALUE };
-  static node_T  *head = NULL, /* Declare the head of the list.
+  static concurso_T  ultimo_concurso;
+  const  concurso_T *concurso_anterior = NULL;
+  static param_T     p = { .primo_min = UNDEFINED_VALUE,
+                           .primo_max = UNDEFINED_VALUE };
+  static node_T     *head = NULL, /* Declare the head of the list.
                                   The head is used as a reference for all
                                   functions. */
-                 *tmp_node = NULL;
-  FILE           *fp;
-  char           str[ MAX_LINE ];
-  int            rc;  // return code
-  uint64_t       usi = 0,
-                 total_possivel;
-  unsigned long  ul;
-  int            caractere;
+                    *tmp_node = NULL;
+  FILE              *fp;
+  char              str[ MAX_LINE ];
+  int               rc;  // return code
+  uint64_t          usi = 0,
+                    total_possivel;
+  unsigned long     ul;
+  int               caractere;
+  static resumo_T   resumo;
+  resumo_T         *rs = NULL;    /* NULL: sem -t */
 
 
   if ( argc < 2 ) {
@@ -755,11 +1014,15 @@ main( int argc, char **argv )
   //memset( &p, 0, sizeof( *p ) ); // retirado. p eh static
   opterr = 0;
 
-  while ( ( caractere = getopt( argc, argv, "vn:p:a:i:x:f:d:l:c:s:e:r:m:" ) ) !=
+  while ( ( caractere = getopt( argc, argv, "vgtn:p:a:i:x:f:d:l:c:s:e:r:m:" ) ) !=
                                                                UNDEFINED_VALUE )
   {
     switch ( caractere ) {
       case 'v': p.verbose = true;
+        break;
+      case 'g': p.grade = true;
+        break;
+      case 't': p.totais = true;
         break;
       case 'n':
         if ( parse_ulong( optarg, 1, MAX_COMB, &ul ) == false ) {
@@ -800,10 +1063,7 @@ main( int argc, char **argv )
           case 10: p.a10 = true; break;
           case 11: p.a11 = true; break;
         }
-        if ( p.ultimo_concurso == NULL ) {   /* le o .conf apenas uma vez */
-          read_conf_file( &ultimo_concurso );
-          p.ultimo_concurso = &ultimo_concurso;
-        }
+        p.usa_a = true;
         break;
       case 'i':
         if ( parse_ulong( optarg, SOMA_MIN, SOMA_MAX, &ul ) == false ) {
@@ -1021,13 +1281,19 @@ main( int argc, char **argv )
     }
   }
 
+  if ( p.totais )
+    rs = &resumo;
+
   tmp_node = create_node();
 
   if ( p.qtd_comb_randomicas > 0 ) {
     usi = 0; // contador de combinacoes randomicas validas
     
-    // faz o filtro pela quatidade de combinacoes randomicas geradas pelos sistema,
-    // ignorando o arquito matriz
+    /* modo aleatorio: o concurso anterior vem do .conf (so com -a) */
+    if ( p.usa_a == true ) {
+      ultimo_concurso = read_config_file();
+      concurso_anterior = &ultimo_concurso;
+    }
 
     while ( usi < p.qtd_comb_randomicas )
     {
@@ -1040,7 +1306,7 @@ main( int argc, char **argv )
              sizeof( tmp_node->a_lt[0] ),
              qsort_asc );
 
-      calc_stats( tmp_node, p.ultimo_concurso );
+      calc_stats( tmp_node, concurso_anterior );
 
       // combinacao reprovada por algum filtro
       if ( ticket_ok( tmp_node, &p ) == false )
@@ -1050,7 +1316,7 @@ main( int argc, char **argv )
       if ( push_node_end( &head, tmp_node, true ) ) {
         usi++;
         // imprime na tela essa combinacao valida após encontra-la
-        print_node( tmp_node, &p );
+        print_node( tmp_node, &p, rs );
       }
     }
   } else {
@@ -1103,13 +1369,21 @@ main( int argc, char **argv )
 
       qsort( tmp_node->a_lt, QTD_NUM_SORTEADOS,
              sizeof( tmp_node->a_lt[0] ), qsort_asc );
-      calc_stats( tmp_node, p.ultimo_concurso );
+      calc_stats( tmp_node, concurso_anterior );
       if ( ticket_ok( tmp_node, &p ) )
         push_node_end( &head, tmp_node, false );
+
+      /* esta linha (passando ou nao nos filtros) e o "concurso anterior"
+         da proxima; na 1a linha conc e NULL, ou seja, 0 repetidos */
+      memcpy( ultimo_concurso.a_dezenas, tmp_node->a_lt,
+              sizeof( ultimo_concurso.a_dezenas ) );
+      concurso_anterior = &ultimo_concurso;
     }
     fclose( fp );
-    print_list( head, &p );
+    print_list( head, &p, rs );
   }
+  if ( p.totais )
+    print_resumo( &resumo, mostra_rep( &p ) );
   free( tmp_node );
   free_list( &head );
 
