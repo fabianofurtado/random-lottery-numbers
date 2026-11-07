@@ -18,7 +18,7 @@ so there is no seed and no modulo bias.
 
 * gcc and make
 * libconfig (development files)
-* glibc >= 2.36 (for `arc4random_uniform`)
+* glibc >= 2.36 (for `arc4random_uniform()`)
 
 ```
 # Debian / Ubuntu
@@ -49,7 +49,7 @@ gcc -Wall -Wextra -O2 lf_filter.c -o lf_filter -lconfig
 
 ### Configuration file
 
-With `-n`, the `-a` option compares the combinations with the previous draw, which is
+With `-n`, the `-a` and `-A` options compare the combinations with the previous draw, which is
 read from `lf_filter.conf` in the current directory (the file is read only in this case):
 
 ```
@@ -73,9 +73,10 @@ read from the file.
 
 In a matrix file, the "previous draw" of a line is the line before it (the first
 line has 0 repeated numbers), so the order of the lines matters. This is used by
-`-a` and by the `Rep` field of `-v`; `lf_filter.conf` is not read in this mode.
+`-a`, `-A` and by the `Rep` field of `-v`; `lf_filter.conf` is not read in this mode.
 The previous line is always the previous record of the file, even if it was
-discarded by some filter.
+discarded by some filter. When `-a` or `-A` is used, the first line is always
+discarded (there is no previous draw to compare it with).
 
 Example `matrix.txt`:
 
@@ -98,8 +99,10 @@ number or a number outside 1..25 aborts the program with an error.
 | `-v`   | show the statistics of each combination (no value) | |
 | `-g`   | grid output: every number always in the same column | (no value) | 
 | `-t`   | totals: summary with averages and percentages at the end | (no value) | 
-| `-p`   | number of even numbers | 6 ~ 9 |
-| `-a`   | numbers repeated from the previous draw (with `-n`: from `lf_filter.conf`; with a matrix file: from the previous line) | 7 ~ 11 |
+| `-p`   | minimum number of even numbers | 2 ~ 12 |
+| `-P`   | maximum number of even numbers (`-p7 -P7` = exactly 7) | 2 ~ 12 |
+| `-a`   | minimum number of numbers repeated from the previous draw (with `-n`: from `lf_filter.conf`; with a matrix file: from the previous line) | 4 ~ 14 |
+| `-A`   | maximum number of numbers repeated from the previous draw (`-a9 -A9` = exactly 9) | 4 ~ 14 |
 | `-i`   | minimum sum | 120 ~ 270 |
 | `-x`   | maximum sum | 120 ~ 270 |
 | `-f`   | fixed number (repeatable) | 1 ~ 25, up to 14 |
@@ -111,17 +114,21 @@ number or a number outside 1..25 aborts the program with an error.
 | `-r`   | minimum number of primes | 1 ~ 9 |
 | `-m`   | maximum number of primes (`-m0` = no primes) | 0 ~ 9 |
 
-If several values are given for `-p`, `-a`, `-l` or `-c`, a combination is kept
+If several values are given for `-l` or `-c`, a combination is kept
 if it matches **any** of them. All the other filters must always match. `-r`
-and `-m` can be used at most once each, and `-r` cannot be greater than `-m`.
+and `-m` can be used at most once each, and `-r` cannot be greater than `-m`. The same
+holds for `-p`/`-P` and `-a`/`-A`. Note that two draws always repeat at least 5 numbers, so
+`-A4` can never match.
+`-f` and `-d` are checked against `-p`/`-P` (for example, more fixed even numbers than `-P`
+allows is an error).
 
 Run without arguments to see the full help.
 
 ### Examples
 
 ```
-# 10 random combinations: 7 even numbers, previous-draw repeats = 9, sum 184..199
-./lf_filter -p7 -a9 -i184 -x199 -n10
+# 10 random combinations: exactly 7 even numbers, previous-draw repeats = 9, sum 184..199
+./lf_filter -p7 -P7 -a9 -A9 -i184 -x199 -n10
 
 # 5 combinations that contain 1 and 25 and never contain 13
 ./lf_filter -f1 -f25 -d13 -n5
@@ -130,10 +137,10 @@ Run without arguments to see the full help.
 ./lf_filter -r4 -m6 -n10
 
 # filter an existing list
-./lf_filter -p7 -r5 matrix.txt
+./lf_filter -p7 -P7 -r5 matrix.txt
 
 # same, showing the statistics of each combination
-./lf_filter -v -p7 -r5 matrix.txt
+./lf_filter -v -p7 -P7 -r5 matrix.txt
 
 # only the statistics, without filtering anything
 ./lf_filter -v matrix.txt
@@ -170,6 +177,7 @@ With `-t`, a summary of the combinations that were printed is shown after the li
 ```
 Combinacoes = 40  Soma media = 193.40
 Par        7= 35.00%(14)      8= 30.00%(12)      6= 12.50%( 5)      9= 12.50%( 5)      5=  7.50%( 3)      4=  2.50%( 1)
+Impar      8= 35.00%(14)      7= 30.00%(12)      6= 12.50%( 5)      9= 12.50%( 5)     10=  7.50%( 3)     11=  2.50%( 1)
 Primo      5= 40.00%(16)      6= 30.00%(12)      4= 10.00%( 4)      7= 10.00%( 4)      8=  7.50%( 3)      3=  2.50%( 1)
 Rep        9= 32.50%(13)      8= 22.50%( 9)     10= 17.50%( 7)     11= 15.00%( 6)      7=  7.50%( 3)      0=  2.50%( 1)      6=  2.50%( 1)
 L      43332= 27.50%(11)  44322= 27.50%(11)  44331= 15.00%( 6)  54321= 10.00%( 4)  44421=  5.00%( 2)  53322=  5.00%( 2)
@@ -181,7 +189,7 @@ SeqNS      3= 42.50%(17)      2= 35.00%(14)      4= 17.50%( 7)      5=  5.00%( 2
 There is one line per group, and the values of each line are sorted by percentage, in
 descending order (ties are listed by value). Each value shows `value=percentage(count)`,
 and the columns are aligned from one line to the next. The groups are: even numbers
-(`Par`), primes (`Primo`), repeated from the previous draw (`Rep`, same rule as in
+(`Par`), odd numbers (`Impar`), primes (`Primo`), repeated from the previous draw (`Rep`, same rule as in
 `-v`), row patterns (`L`), column patterns (`C`), longest sequence of drawn numbers
 (`SeqS`) and of non-drawn numbers (`SeqNS`). Only the values that occurred are listed,
 and `L` and `C` show only the 6 most frequent patterns. The first line also has the
@@ -190,15 +198,15 @@ average sum. `-t` does not change the list, so it can be combined with `-v` and 
 With `-v`, the statistics of each combination are appended:
 
 ```
-01 02 03 04 06 07 11 15 16 17 18 19 22 24 25   Soma=190  Pares=07  Impares=08  Primos=6  Rep=9  L=44322  C=44322  SeqS=5  SeqNS=3
+01 02 03 04 06 07 11 15 16 17 18 19 22 24 25   Som=190  Par=7   Imp=8   Pri=6   Rep=9   L=44322  C=44322  SeqS=5   SeqNS=3
 ```
 
 | Field | Meaning |
 |-------|---------|
-| `Soma` | sum of the 15 numbers |
-| `Pares` / `Impares` | even / odd numbers |
-| `Primos` | prime numbers |
-| `Rep` | numbers repeated from the previous draw: the previous line with a matrix file (0 on the first line), or `lf_filter.conf` with `-n -a` (not shown with `-n` alone) |
+| `Som` | sum of the 15 numbers |
+| `Par` / `Imp` | even / odd numbers |
+| `Pri` | prime numbers |
+| `Rep` | numbers repeated from the previous draw: the previous line with a matrix file (0 on the first line), or `lf_filter.conf` with `-n -a`/`-A` (not shown with `-n` alone) |
 | `L` / `C` | distribution by rows / columns, in descending order (any of the 18 possible patterns, even those not accepted by `-l`/`-c`) |
 | `SeqS` | longest sequence of drawn numbers |
 | `SeqNS` | longest sequence of non-drawn numbers |

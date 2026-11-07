@@ -20,7 +20,12 @@
  *
  * * * * * * * * * * * * * * * * * * * * * * *
  * Historico:
- *   * 2026-11-05 - Inclusao do parametro "-t" (totais: apos a saida mostra a
+ *   * 2026-11-07 - "-p" passa a ser a quantidade MINIMA de pares e inclusao do
+ *                  "-P" (MAXIMA); validacoes com -f/-d
+ *   * 2026-11-05 - "-a" passa a ser a quantidade MINIMA de repetidos do concurso
+ *                  anterior e inclusao do "-A" (MAXIMA), como "-r" e "-m";
+ *                  com arquivo matriz a 1a linha e descartada se houver -a/-A
+ *                - Inclusao do parametro "-t" (totais: apos a saida mostra a
  *                  soma media e a porcentagem de cada valor dos filtros,
  *                  de cada grupo, em ordem decrescente de porcentagem)
  *                - Inclusao do parametro "-g" (saida em grade: cada numero
@@ -55,6 +60,7 @@
 #include <string.h>
 #include <unistd.h>
 
+
 #define NOM                   "Lotofacil"
 #define NUM_MINIMO            1
 #define NUM_MAXIMO            25
@@ -73,10 +79,15 @@
 #define CONF_FILE             "lf_filter.conf"
 #define LF_MAX_PRIME          9
 #define UNDEFINED_VALUE       -1
-#define QTD_PADROES           18   /* padroes possiveis de linhas/colunas */
+#define QTD_PADROES           18  /* padroes possiveis de linhas/colunas */
+#define MIN_NUM_PAR           2   /* -p: menor valor aceito (15 - 13 impares) */
+#define MAX_NUM_PAR           12  /* -P: maior valor aceito (12 pares em 1..25) */
+#define MASK_PARES            UINT32_C(0x01555554) /* bits 2,4,...,24 */
+#define ANTERIOR_MIN          4   /* -a: menor valor aceito           */
+#define ANTERIOR_MAX          ( QTD_NUM_SORTEADOS - 1 ) /* -A: maior valor aceito */
 
-#define RES_LARG_VALOR        5    /* largura do valor; cabe um padrao, ex: 43332 */
-#define RES_MAX_PADROES       6    /* L e C: somente os 6 mais frequentes         */
+#define RES_LARG_VALOR        5   /* largura do valor; cabe um padrao, ex: 43332 */
+#define RES_MAX_PADROES       6   /* L e C: somente os 6 mais frequentes         */
 
 
 typedef struct {
@@ -92,21 +103,21 @@ typedef struct {
 } concurso_T;
 
 typedef struct {
-  uint32_t mask;      /* bit n ligado = numero n sorteado (n = 1..25) */
-  uint16_t soma,
-           linha,     /* padrao das linhas, ex: 43332  */
-           coluna;    /* padrao das colunas, ex: 44322 */
   uint8_t  pares,
            primos,
            repetidos, /* repetidos do concurso anterior (so com -a) */
            seq_sort,  /* maior sequencia de numeros sorteados     */
            seq_desc;  /* maior sequencia de numeros NAO sorteados */
+  uint16_t soma,
+           linha,     /* padrao das linhas, ex: 43332  */
+           coluna;    /* padrao das colunas, ex: 44322 */
+  uint32_t mask;      /* bit n ligado = numero n sorteado (n = 1..25) */
 } stats_T;
 
 typedef struct node {
   uint8_t a_lt[QTD_NUM_SORTEADOS]; /* array of lottery ticket */
-  stats_T st;         /* calculado por calc_stats() */
   struct node * next;
+  stats_T st;         /* calculado por calc_stats() */
 } node_T;
 
 typedef struct {
@@ -125,13 +136,14 @@ typedef struct {
   bool verbose,
        totais,     /* resumo estatistico no final (-t)      */
        grade,      /* saida em grade (-g)                   */
-       usa_a,      /* algum "-a" informado                  */
-       p6, p7, p8, p9,
-       a7, a8, a9, a10, a11,
        dl43332, dl44322, dl44331, dl53322, dl54321,
        dc43332, dc44322, dc44331, dc53322, dc54321;
-  uint8_t qtd_fixos,
+  uint8_t par_min,       /* -p: 0 = nao informado */
+          par_max,       /* -P: 0 = nao informado */
+          qtd_fixos,
           qtd_descartados,
+          anterior_min,  /* -a: 0 = nao informado */
+          anterior_max,  /* -A: 0 = nao informado */
           seq_min_sorteados,
           seq_min_descartados;
   int8_t  primo_min,
@@ -149,6 +161,13 @@ enum {
   LINE_FORMAT,
   LINE_RANGE,
   LINE_DUP
+};
+
+
+/* todos os padroes possiveis de linhas/colunas (15 numeros em 5 grupos de 5) */
+static const uint16_t padroes[QTD_PADROES] = {
+  33333, 43332, 44322, 44331, 44421, 44430, 53322, 53331, 54222,
+  54321, 54330, 54411, 54420, 55221, 55311, 55320, 55410, 55500
 };
 
 
@@ -173,10 +192,10 @@ is_lf_prime( const uint8_t n )
   const uint8_t lf_prime[LF_MAX_PRIME] = { 2, 3, 5, 7, 11, 13, 17, 19, 23 };
 
 
-  for ( uc = 0 ; uc < LF_MAX_PRIME ; uc++ ) {
+  for ( uc = 0 ; uc < LF_MAX_PRIME ; uc++ )
     if ( n  == lf_prime[uc] )
       return true;
-  }
+
 
   return false;
 }
@@ -198,6 +217,7 @@ get_valid_sequence( node_T *node ) // Baseado em Fisher-Yates
 
   for( i = 0 ; i < NUM_MAXIMO ; i++ )
     tmp_pool[i] = i + NUM_MINIMO;
+
   for( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ ) {
     j = i + arc4random_uniform( NUM_MAXIMO - i ); // glibc >= 2.36
     tmp = tmp_pool[i];
@@ -264,7 +284,9 @@ padrao_linha( const uint8_t *lottery_ticket )
 
   for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
     linha[ ( lottery_ticket[i] - 1 ) / 5 ]++;
+
   qsort( linha, QTD_LINHAS, sizeof( linha[0] ), qsort_desc );
+
   for ( i = 0 ; i < QTD_LINHAS ; i++ )
     padrao = 10 * padrao + linha[i];
 
@@ -286,7 +308,9 @@ padrao_coluna( const uint8_t *lottery_ticket )
 
   for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
     coluna[ ( lottery_ticket[i] - 1 ) % 5 ]++;
+
   qsort( coluna, QTD_COLUNAS, sizeof( coluna[0] ), qsort_desc );
+
   for ( i = 0 ; i < QTD_COLUNAS ; i++ )
     padrao = 10 * padrao + coluna[i];
 
@@ -326,6 +350,7 @@ max_seq_descartados( const uint8_t *lottery_ticket )
 
   for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ )
     drawn[lottery_ticket[i]] = true;
+ 
   for ( i = NUM_MINIMO ; i <= NUM_MAXIMO ; i++ ) {
     if ( drawn[i] )
       seq = 0;
@@ -347,6 +372,7 @@ calc_stats( node_T *node, const concurso_T *uc )
 
   s->soma = 0;
   s->mask = 0;
+
   for ( i = 0 ; i < QTD_NUM_SORTEADOS ; i++ ) {
     s->soma += lt[i];
     s->mask |= UINT32_C(1) << lt[i];
@@ -368,15 +394,14 @@ ticket_ok( const node_T *node, const param_T *p )
   const stats_T *s = &node->st;
 
 
-  if ( ( p->p6 || p->p7 || p->p8 || p->p9 ) &&
-       !( ( p->p6 && s->pares == 6 ) || ( p->p7 && s->pares == 7 ) ||
-          ( p->p8 && s->pares == 8 ) || ( p->p9 && s->pares == 9 ) ) )
+  if ( p->par_min != 0 && s->pares < p->par_min )
+    return false;
+  if ( p->par_max != 0 && s->pares > p->par_max )
     return false;
 
-  if ( p->usa_a == true &&
-       ( ( p->a7  && s->repetidos ==  7 ) || ( p->a8  && s->repetidos ==  8 ) ||
-         ( p->a9  && s->repetidos ==  9 ) || ( p->a10 && s->repetidos == 10 ) ||
-         ( p->a11 && s->repetidos == 11 ) ) == false )
+  if ( p->anterior_min != 0 && s->repetidos < p->anterior_min )
+    return false;
+  if ( p->anterior_max != 0 && s->repetidos > p->anterior_max )
     return false;
 
   if ( p->soma_min > 0 && s->soma < p->soma_min )
@@ -421,13 +446,6 @@ ticket_ok( const node_T *node, const param_T *p )
 }
 
 
-/* todos os padroes possiveis de linhas/colunas (15 numeros em 5 grupos de 5) */
-static const uint16_t padroes[QTD_PADROES] = {
-  33333, 43332, 44322, 44331, 44421, 44430, 53322, 53331, 54222,
-  54321, 54330, 54411, 54420, 55221, 55311, 55320, 55410, 55500
-};
-
-
 static size_t
 idx_padrao( const uint16_t padrao )
 {
@@ -455,8 +473,10 @@ resumo_add( resumo_T *r, const stats_T *s )
   r->rep[s->repetidos]++;
   r->seq_s[s->seq_sort]++;
   r->seq_ns[s->seq_desc]++;
+
   if ( ( k = idx_padrao( s->linha ) ) < QTD_PADROES )
     r->linha[k]++;
+
   if ( ( k = idx_padrao( s->coluna ) ) < QTD_PADROES )
     r->coluna[k]++;
 }
@@ -477,11 +497,19 @@ qsort_item( const void *a, const void *b )
 }
 
 
-/* "Rep" eh mostrado no modo matriz (sempre) e no modo -n (so com -a) */
+/* true se foi informado -a e/ou -A */
+static bool
+usa_anterior( const param_T *p )
+{
+  return p->anterior_min != 0 || p->anterior_max != 0;
+}
+
+
+/* "Rep" eh mostrado no modo matriz (sempre) e no modo -n (so com -a/-A) */
 static bool
 mostra_rep( const param_T *p )
 {
-  return p->usa_a == true || p->qtd_comb_randomicas == 0;
+  return usa_anterior( p ) == true || p->qtd_comb_randomicas == 0;
 }
 
 
@@ -513,11 +541,14 @@ print_linha( const char *nome, item_T *it, const size_t qtd, const size_t max,
 
 
   qsort( it, qtd, sizeof( it[0] ), qsort_item );
+
   printf( "%-5s", nome );
+
   for ( i = 0 ; i < qtd && i < max ; i++ )
     printf( "  %*u=%6.2f%%(%*lu)", RES_LARG_VALOR, (unsigned)it[i].valor,
             100.0 * (double)it[i].n / (double)total,
             digitos( total ), (unsigned long)it[i].n );
+
   printf( "\n" );
 }
 
@@ -540,6 +571,7 @@ print_valores( const char *nome, const uint64_t *cont, const size_t qtd,
     it[k].ordem = k;
     k++;
   }
+
   print_linha( nome, it, k, k, total );
 }
 
@@ -561,6 +593,7 @@ print_padroes( const char *nome, const uint64_t *cont, const uint64_t total )
     it[k].ordem = k;
     k++;
   }
+
   print_linha( nome, it, k, RES_MAX_PADROES, total );
 }
 
@@ -568,6 +601,10 @@ print_padroes( const char *nome, const uint64_t *cont, const uint64_t total )
 static void
 print_resumo( const resumo_T *r, const bool mostra_rep )
 {
+  uint64_t impares[QTD_NUM_SORTEADOS + 1];
+  size_t   i;
+
+
   printf( "\nCombinacoes = %lu", (unsigned long)r->total );
   if ( r->total == 0 ) {
     printf( "\n" );
@@ -576,9 +613,16 @@ print_resumo( const resumo_T *r, const bool mostra_rep )
 
   printf( "  Soma media = %.2f\n", (double)r->soma / (double)r->total );
   print_valores( "Par", r->pares, QTD_NUM_SORTEADOS + 1, r->total );
+
+  for ( i = 0 ; i <= QTD_NUM_SORTEADOS ; i++ )  /* impares = 15 - pares */
+    impares[i] = r->pares[QTD_NUM_SORTEADOS - i];
+
+  print_valores( "Impar", impares, QTD_NUM_SORTEADOS + 1, r->total );
   print_valores( "Primo", r->primos, QTD_NUM_SORTEADOS + 1, r->total );
+
   if ( mostra_rep )
     print_valores( "Rep", r->rep, QTD_NUM_SORTEADOS + 1, r->total );
+
   print_padroes( "L", r->linha, r->total );
   print_padroes( "C", r->coluna, r->total );
   print_valores( "SeqS", r->seq_s, QTD_NUM_SORTEADOS + 1, r->total );
@@ -618,11 +662,13 @@ print_node( const node_T *node, const param_T *p, resumo_T *r )
   }
 
   if ( p->verbose == true ) {
-    printf( "   Soma=%d  Pares=%02d  Impares=%02d  Primos=%d",
+    /* campos com largura fixa (alinhados a esquerda): o inicio de cada campo
+       nao depende da quantidade de digitos. O ultimo nao tem espacos no fim. */
+    printf( "   Som=%-3d  Par=%-2d  Imp=%-2d  Pri=%-2d",
             s->soma, s->pares, QTD_NUM_SORTEADOS - s->pares, s->primos );
     if ( mostra_rep( p ) == true )
-      printf( "  Rep=%d", s->repetidos );
-    printf( "  L=%d  C=%d  SeqS=%d  SeqNS=%d",
+      printf( "  Rep=%-2d", s->repetidos );
+    printf( "  L=%d  C=%d  SeqS=%-2d  SeqNS=%d",
             s->linha, s->coluna, s->seq_sort, s->seq_desc );
   }
   printf( "\n" );
@@ -918,21 +964,23 @@ print_help( const char *argv0 )
     "      uma linha por grupo, em ordem decrescente de porcentagem\n"
     "      (linhas e colunas: apenas os 6 padroes mais frequentes).\n\n"
     "Onde [FILTRO]:\n"
-    "  -p <quantidade de pares>\n"
-    "     Exemplo: -p7, filtra por 7 pares (e 8 impares)\n"
-    "              -p8, filtra por 8 pares (e 7 impares)\n"
-    "              -p6, filtra por 6 pares (e 9 impares)\n"
-    "              -p9, filtra por 9 pares (e 6 impares)\n"
-    "  -a<quantidade de numeros repetidos do concurso anterior>\n"
-    "     Com -n, o concurso anterior e lido de " CONF_FILE ".\n"
-    "     Com arquivo matriz, e a linha anterior do arquivo (a 1a linha\n"
-    "     tem 0 repetidos).\n"
-    "     Estatisticamente:\n"
-    "       -a9  = 33.44%%\n"
-    "       -a8  = 25.21%%\n"
-    "       -a10 = 21.14%%\n"
-    "       -a7  =  9.12%%\n"
-    "       -a11 =  8.13%%\n"
+    "  -p<quantidade MINIMA de pares> (%d a %d)\n"
+    "  -P<quantidade MAXIMA de pares> (%d a %d)\n"
+    "     Exemplo: -p7 -P8, filtra por 7 a 8 pares (8 a 7 impares)\n"
+    "              -p7 -P7, filtra por exatamente 7 pares (e 8 impares)\n"
+    "              -p8, filtra por 8 pares ou mais\n"
+    "  -a<qtd MINIMA de numeros repetidos do concurso anterior> (%d a %d)\n"
+    "  -A<qtd MAXIMA de numeros repetidos do concurso anterior> (%d a %d)\n"
+    "     Com -n, o concurso anterior eh lido do arquivo \"" CONF_FILE "\".\n"
+    "     Com arquivo matriz, e a linha anterior do arquivo (a 1a linha e\n"
+    "     sempre descartada, pois nao tem linha anterior).\n"
+    "     Exemplo: -a8 -A10 filtra por 8 a 10 repetidos; -a9 -A9, por 9.\n"
+    "     Estatisticamente (quantidade exata):\n"
+    "       9  = 33.44%%\n"
+    "       8  = 25.21%%\n"
+    "       10 = 21.14%%\n"
+    "       7  =  9.12%%\n"
+    "       11 =  8.13%%\n"
     "  -i<min>, soma MINIMA de todos os numeros (%d a %d)\n"
     "  -x<max>, soma MAXIMA de todos os numeros (%d a %d)\n"
     "    * Estatisticamente, recomanda-se <min> = 184 e <max> = 199\n"
@@ -972,6 +1020,10 @@ print_help( const char *argv0 )
     "  -m<qtd MAXIMA primos>, filtra por uma quantidade MAXIMA de numeros primos no sorteio.\n"
     "    * Obs: Valores permitidos: -m0 ate -m%d (-m0 -nenhum primo- é possível!)\n\n",
     argv0,
+    MIN_NUM_PAR, MAX_NUM_PAR,   /* -p */
+    MIN_NUM_PAR, MAX_NUM_PAR,   /* -P */
+    ANTERIOR_MIN, ANTERIOR_MAX, /* -a */
+    ANTERIOR_MIN, ANTERIOR_MAX, /* -A */
     SOMA_MIN, SOMA_MAX,      /* -i */
     SOMA_MIN, SOMA_MAX,      /* -x */
     NUM_MAX_FIXOS,           /* -f */
@@ -1002,6 +1054,7 @@ main( int argc, char **argv )
                     total_possivel;
   unsigned long     ul;
   int               caractere;
+  bool              sem_anterior;
   static resumo_T   resumo;
   resumo_T         *rs = NULL;    /* NULL: sem -t */
 
@@ -1014,7 +1067,9 @@ main( int argc, char **argv )
   //memset( &p, 0, sizeof( *p ) ); // retirado. p eh static
   opterr = 0;
 
-  while ( ( caractere = getopt( argc, argv, "vgtn:p:a:i:x:f:d:l:c:s:e:r:m:" ) ) !=
+  while ( ( caractere = getopt( argc,
+                                argv,
+                                "vgtn:p:P:a:A:i:x:f:d:l:c:s:e:r:m:" ) ) !=
                                                                UNDEFINED_VALUE )
   {
     switch ( caractere ) {
@@ -1035,35 +1090,70 @@ main( int argc, char **argv )
         p.qtd_comb_randomicas = (uint64_t)ul;
         break;
       case 'p':
-        if ( parse_ulong( optarg, 6, 9, &ul ) == false ) {
+        if ( parse_ulong( optarg, MIN_NUM_PAR, MAX_NUM_PAR, &ul ) == false ) {
           fprintf( stderr,
-                   "\nERRO! Parametro de pares e impares '-p%s' invalido!\n\n",
+                   "\nERRO! Parametro de pares MINIMO '-p%s' invalido!\n\n",
                    optarg );
           return 1;
         }
-        switch ( ul ) {
-          case 6: p.p6 = true; break;
-          case 7: p.p7 = true; break;
-          case 8: p.p8 = true; break;
-          case 9: p.p9 = true; break;
+        if ( p.par_min == 0 )
+          p.par_min = (uint8_t)ul;
+        else {
+          fprintf( stderr,
+                   "\nERRO! Parametro '-%c' precisa ser unico!\n\n",
+                   caractere );
+          return 1;
+        }
+        break;
+      case 'P':
+        if ( parse_ulong( optarg, MIN_NUM_PAR, MAX_NUM_PAR, &ul ) == false ) {
+          fprintf( stderr,
+                   "\nERRO! Parametro de pares MAXIMO '-P%s' invalido!\n\n",
+                   optarg );
+          return 1;
+        }
+        if ( p.par_max == 0 )
+          p.par_max = (uint8_t)ul;
+        else {
+          fprintf( stderr,
+                   "\nERRO! Parametro '-%c' precisa ser unico!\n\n",
+                   caractere );
+          return 1;
         }
         break;
       case 'a':
-        if ( parse_ulong( optarg, 7, 11, &ul ) == false ) {
+        if ( parse_ulong( optarg, ANTERIOR_MIN, ANTERIOR_MAX, &ul ) == false ) {
           fprintf( stderr,
-                   "\nERRO! Parametro \"numeros repetidos do concurso "
-                   "anterior\" '-a%s' invalido!\n\n",
+                   "\nERRO! Parametro de repetidos MINIMO do concurso "
+                   "anterior '-a%s' invalido!\n\n",
                    optarg );
           return 1;
         }
-        switch ( ul ) {
-          case  7: p.a7  = true; break;
-          case  8: p.a8  = true; break;
-          case  9: p.a9  = true; break;
-          case 10: p.a10 = true; break;
-          case 11: p.a11 = true; break;
+        if ( p.anterior_min == 0 )
+          p.anterior_min = (uint8_t)ul;
+        else {
+          fprintf( stderr,
+                   "\nERRO! Parametro '-%c' precisa ser unico!\n\n",
+                   caractere );
+          return 1;
         }
-        p.usa_a = true;
+        break;
+      case 'A':
+        if ( parse_ulong( optarg, ANTERIOR_MIN, ANTERIOR_MAX, &ul ) == false ) {
+          fprintf( stderr,
+                   "\nERRO! Parametro de repetidos MAXIMO do concurso "
+                   "anterior '-A%s' invalido!\n\n",
+                   optarg );
+          return 1;
+        }
+        if ( p.anterior_max == 0 )
+          p.anterior_max = (uint8_t)ul;
+        else {
+          fprintf( stderr,
+                   "\nERRO! Parametro '-%c' precisa ser unico!\n\n",
+                   caractere );
+          return 1;
+        }
         break;
       case 'i':
         if ( parse_ulong( optarg, SOMA_MIN, SOMA_MAX, &ul ) == false ) {
@@ -1227,7 +1317,8 @@ main( int argc, char **argv )
         }
         break;
       case '?':
-        if ( ( optopt == 'n' ) || ( optopt == 'p' ) || ( optopt == 'a' ) ||
+        if ( ( optopt == 'n' ) || ( optopt == 'p' ) || ( optopt == 'P' ) || ( optopt == 'a' ) ||
+             ( optopt == 'A' ) ||
              ( optopt == 'i' ) || ( optopt == 'x' ) || ( optopt == 'f' ) ||
              ( optopt == 'd' ) || ( optopt == 'l' ) || ( optopt == 'c' ) ||
              ( optopt == 's' ) || ( optopt == 'e' ) || ( optopt == 'r' ) ||
@@ -1250,6 +1341,56 @@ main( int argc, char **argv )
     fprintf( stderr,
              "\nERRO! \"-i (%d)\" maior que \"-x (%d)\"!\n\n",
              p.soma_min, p.soma_max );
+    return 1;
+  }
+
+  if ( p.par_min != 0 && p.par_max != 0 && p.par_min > p.par_max ) {
+    fprintf( stderr,
+             "\nERRO! \"-p (%d)\" maior que \"-P (%d)\"!\n\n",
+             p.par_min, p.par_max );
+    return 1;
+  }
+
+  /* -f/-d x -p/-P: verifica se ainda e possivel atingir a faixa de pares */
+  {
+    const uint8_t fix_par  = (uint8_t)__builtin_popcount( p.mask_fixos & MASK_PARES );       /* pares em -f              */
+    const uint8_t fix_imp  = (uint8_t)( p.qtd_fixos - fix_par );                             /* impares em -f            */
+    const uint8_t desc_par = (uint8_t)__builtin_popcount( p.mask_descartados & MASK_PARES ); /* pares em -d              */
+    const uint8_t desc_imp = (uint8_t)( p.qtd_descartados - desc_par );                      /* impares em -d            */
+    const uint8_t disp_par = (uint8_t)( NUM_MAXIMO / 2 - desc_par );                         /* pares ainda disponiveis  */
+    const uint8_t disp_imp = (uint8_t)( NUM_MAXIMO - NUM_MAXIMO / 2 - desc_imp );            /* impares ainda disponiveis*/
+
+    if ( p.par_max != 0 && fix_par > p.par_max ) {
+      fprintf( stderr,
+               "\nERRO! \"-f\" tem %d pares, mais que \"-P (%d)\"!\n\n",
+               fix_par, p.par_max );
+      return 1;
+    }
+    if ( p.par_min != 0 && fix_imp > QTD_NUM_SORTEADOS - p.par_min ) {
+      fprintf( stderr,
+               "\nERRO! \"-f\" tem %d impares; com \"-p (%d)\" o maximo e %d!\n\n",
+               fix_imp, p.par_min, QTD_NUM_SORTEADOS - p.par_min );
+      return 1;
+    }
+    if ( p.par_min != 0 && disp_par < p.par_min ) {
+      fprintf( stderr,
+               "\nERRO! \"-d\" deixa so %d pares disponiveis, menos que \"-p (%d)\"!\n\n",
+               disp_par, p.par_min );
+      return 1;
+    }
+    if ( p.par_max != 0 && disp_imp < QTD_NUM_SORTEADOS - p.par_max ) {
+      fprintf( stderr,
+               "\nERRO! \"-d\" deixa so %d impares disponiveis; \"-P (%d)\" exige %d!\n\n",
+               disp_imp, p.par_max, QTD_NUM_SORTEADOS - p.par_max );
+      return 1;
+    }
+  }
+
+  if ( p.anterior_min != 0 && p.anterior_max != 0 &&
+       p.anterior_min > p.anterior_max ) {
+    fprintf( stderr,
+             "\nERRO! \"-a (%d)\" maior que \"-A (%d)\"!\n\n",
+             p.anterior_min, p.anterior_max );
     return 1;
   }
 
@@ -1289,8 +1430,8 @@ main( int argc, char **argv )
   if ( p.qtd_comb_randomicas > 0 ) {
     usi = 0; // contador de combinacoes randomicas validas
     
-    /* modo aleatorio: o concurso anterior vem do .conf (so com -a) */
-    if ( p.usa_a == true ) {
+    /* modo aleatorio: o concurso anterior vem do .conf (so com -a/-A) */
+    if ( usa_anterior( &p ) == true ) {
       ultimo_concurso = read_config_file();
       concurso_anterior = &ultimo_concurso;
     }
@@ -1369,12 +1510,14 @@ main( int argc, char **argv )
 
       qsort( tmp_node->a_lt, QTD_NUM_SORTEADOS,
              sizeof( tmp_node->a_lt[0] ), qsort_asc );
+      /* 1a linha: nao ha linha anterior para comparar; com -a/-A e descartada */
+      sem_anterior = ( concurso_anterior == NULL && usa_anterior( &p ) == true );
       calc_stats( tmp_node, concurso_anterior );
-      if ( ticket_ok( tmp_node, &p ) )
+      if ( sem_anterior == false && ticket_ok( tmp_node, &p ) )
         push_node_end( &head, tmp_node, false );
 
       /* esta linha (passando ou nao nos filtros) e o "concurso anterior"
-         da proxima; na 1a linha conc e NULL, ou seja, 0 repetidos */
+         da proxima; na 1a linha concurso_anterior e NULL (0 repetidos) */
       memcpy( ultimo_concurso.a_dezenas, tmp_node->a_lt,
               sizeof( ultimo_concurso.a_dezenas ) );
       concurso_anterior = &ultimo_concurso;
