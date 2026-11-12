@@ -35,8 +35,7 @@ fi
 
 cores=(ff0000 ff3300 ff6600 ff9900 ffcc00 ffff00 ccff00 99ff00 66ff00 33ff00
        00ff00 00ff33 00ff66 00ff99 00ffcc 00ffff 00ccff 0099ff 0066ff 0033ff
-       0000ff 3300ff 6600ff 9900ff cc00ff ff00ff ff00cc ff0099 ff0066 ff0033
-       848484)
+       0000ff 3300ff 6600ff 9900ff cc00ff ff00ff ff00cc ff0099 ff0066 ff0033 ff001a)
 
 MES_NOME=(x Jan Fev Mar Abr Mai Jun Jul Ago Set Out Nov Dez)
 declare -A MES_NUM=()
@@ -205,8 +204,10 @@ html_add <<'EOF'
 
     body {
       margin: 0;
-      padding: 8px;
+      padding: 6px 2vw;
+      min-width: max-content;
       font: 12px/1.3 "Trebuchet MS", "Lucida Sans", Arial, sans-serif;
+      font-size: clamp(12px, 1.05vw, 48px);
       color: var(--texto);
     }
 
@@ -220,13 +221,14 @@ html_add <<'EOF'
     .resultados {
       border-collapse: separate;
       border-spacing: 0;
+      width: 100%;
       white-space: nowrap;
       font-variant-numeric: tabular-nums;
     }
 
     .resultados th,
     .resultados td {
-      padding: 1px 3px;
+      padding: 0.1em 0.25em;
       text-align: center;
       border-right: 1px solid var(--borda);
       border-bottom: 1px solid var(--borda);
@@ -235,7 +237,7 @@ html_add <<'EOF'
     .resultados th:first-child,
     .resultados td:first-child { border-left: 1px solid var(--borda); }
 
-    .resultados th:nth-child(n+3):nth-child(-n+33) { width: 26px; }
+    .resultados th:nth-child(n+3):nth-child(-n+33) { width: 2.2em; }
 
     .resultados th:nth-child(35),
     .resultados td:nth-child(35) { border-left: 2px solid #999; }

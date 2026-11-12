@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+################################################################################
 # Inclui apostas da Lotofácil no carrinho do Loterias Online (Caixa).
 # Não grava nada em disco, nem temporário: tudo sai em stdout/stderr.
 # Uso: rode com -h.
@@ -8,7 +9,7 @@
 #   curl
 #   jq 1.6+     (--args / $ARGS.positional)
 #   GNU coreutils: date (%3N e -d @), base64, cat, sleep (fracionário)
-
+################################################################################
 set -u
 set -f   # sem expansão de caminhos ao separar as dezenas
 
@@ -21,51 +22,72 @@ RE_BOT='shieldsquare-response: *([0-9]+)'
 
 uso()
 {
-  local fd=2 me=${0##*/}
+  local me=${0##*/}
 
-  (( $1 == 0 )) && fd=1
   printf '%s\n' \
-    "uso: $me -k subscription_key -t token -c concurso arquivo" \
     '' \
-    '  arquivo  um jogo por linha, 15 dezenas (1 a 25) separadas por' \
+    'uso:' \
+    '  '$me' -k subscription_key -t token -c concurso arquivo' \
+    '' \
+    '  arquivo: um jogo por linha, 15 dezenas (1 a 25) separadas por' \
     '           espaço; linhas em branco e o que vier após # são ignorados' \
     '' \
     '  stdout   jogos incluídos no carrinho' \
-    '  stderr   jogos não incluídos, um por linha, com o motivo após #;' \
-    '           avisos e resumo como comentário (#)' \
+    '  stderr   jogos não incluídos, um por linha, com o motivo após' \
+    '           "# [ERRO]"; avisos e resumo como comentário (#)' \
     '' \
     '  O stderr pode ser gravado e usado como entrada de uma nova execução.' \
     '  Use outro nome no 2> da segunda vez: o shell zera o arquivo de' \
     '  saída antes de o script ler a entrada.' \
     '' \
-    "    $me -k KEY -t TOKEN -c 3827 jogos.txt \\" \
+    '    '$me' -k KEY -t TOKEN -c 3827 jogos.txt \' \
     '      2> lotofacil_3827_pendentes.log' \
-    "    $me -k KEY -t TOKEN_NOVO -c 3827 lotofacil_3827_pendentes.log \\" \
+    '    '$me' -k KEY -t TOKEN_NOVO -c 3827 lotofacil_3827_pendentes.log \' \
     '      2> lotofacil_3827_pendentes2.log' \
     '' \
     '  ambiente PAUSA  segundos entre envios (padrão 0.2)' \
-    '           PRECO  valor da aposta simples (padrão 3.5)' >&"$fd"
-  exit "$1"
+    '           PRECO  valor da aposta simples (padrão 3.5)'
+  exit 0
 }
 
-KEY= TOKEN= CONC=
-while getopts 'hk:t:c:' opt; do
-  case $opt in
-    h) uso 0 ;;
-    k) KEY=$OPTARG ;;
-    t) TOKEN=${OPTARG#Bearer } ;;
-    c) CONC=$OPTARG ;;
-    *) uso 2 ;;
-  esac
-done
-shift $(( OPTIND - 1 ))
-ARQ=${1:-}
+# Erro fatal: "[ERRO] mensagem" no stderr e sai com o código $1
+erro()
+{
+  local rc=$1
 
-[[ -n $KEY && -n $TOKEN && $CONC =~ ^[0-9]+$ && -r $ARQ ]] || uso 2
-command -v jq >/dev/null || { echo "# erro: jq não encontrado" >&2; exit 1; }
+  shift
+  printf '[ERRO] %s\n' "$*" >&2
+  exit "$rc"
+}
+
+# Erro nos parâmetros: sai com 2
+erro_uso() { erro 2 "$* (veja -h)"; }
 
 # Comentário no stderr
 nota() { printf '# %s\n' "$*" >&2; }
+
+KEY= TOKEN= CONC=
+while getopts ':hk:t:c:' opt; do
+  case $opt in
+    h) uso ;;
+    k) KEY=$OPTARG ;;
+    t) TOKEN=${OPTARG#Bearer } ;;
+    c) CONC=$OPTARG ;;
+    :) erro_uso "falta o valor de -$OPTARG" ;;
+    *) erro_uso "opção inválida: -$OPTARG" ;;
+  esac
+done
+shift $(( OPTIND - 1 ))
+(( $# > 1 )) && erro_uso "argumento a mais: $2"
+ARQ=${1:-}
+
+[[ -n $KEY ]]   || erro_uso 'falta a subscription key (-k)'
+[[ -n $TOKEN ]] || erro_uso 'falta o token (-t)'
+[[ -n $CONC ]]  || erro_uso 'falta o número do concurso (-c)'
+[[ $CONC =~ ^[0-9]+$ ]] || erro_uso "concurso inválido: $CONC"
+[[ -n $ARQ ]]   || erro_uso 'falta o arquivo de jogos'
+[[ -r $ARQ && ! -d $ARQ ]] || erro 1 "não consigo ler o arquivo: $ARQ"
+command -v jq >/dev/null || erro 1 'jq não encontrado'
 
 # Validade do token: campo exp do payload do JWT (base64url)
 p=${TOKEN#*.}; p=${p%%.*}
@@ -75,22 +97,22 @@ EXP=$(printf '%s' "$p" | base64 -d 2>/dev/null | jq -r '.exp // empty' 2>/dev/nu
 if [[ $EXP =~ ^[0-9]+$ ]]; then
   quando=$(date -d "@$EXP" '+%d/%m/%Y %H:%M:%S')
   resta=$(( EXP - $(date +%s) ))
-  if (( resta > 0 )); then
-    nota "$(printf 'token válido até %s (restam %dm%02ds)' \
-      "$quando" $(( resta / 60 )) $(( resta % 60 )))"
-  else
-    nota "token expirou em $quando"
-  fi
+  (( resta > 0 )) || erro 1 "token expirou em $quando"
+  nota "$(printf 'token válido até %s (restam %dm%02ds)' \
+    "$quando" $(( resta / 60 )) $(( resta % 60 )))"
 else
   EXP=
-  nota "aviso: não consegui ler a validade do token"
+  nota '[AVISO] não consegui ler a validade do token'
 fi
 
 # stdout: jogo incluído
 incluido() { printf 'combinacao  %5d (%s): ok\n' "$ln" "$dz"; }
 
 # stderr: jogo não incluído, no formato de entrada, com o motivo após #
-pendente() { printf '%s  # combinacao  %5d: %s\n' "$dz" "$ln" "$1" >&2; }
+pendente()
+{
+  printf '%s  # [ERRO] combinacao  %5d: %s\n' "$dz" "$ln" "$1" >&2
+}
 
 # stderr: jogo atual como pendente e o resto do arquivo como está
 parar()
@@ -110,19 +132,23 @@ while IFS= read -r linha <&3; do
 
   # 15 dezenas distintas entre 1 e 25; os índices de seen saem ordenados
   seen=(); bad=
-  for n in "${nums[@]}"; do
-    if ! [[ $n =~ ^[0-9]{1,2}$ ]]; then bad=1; break; fi
-    v=$(( 10#$n ))
-    if (( v < 1 || v > 25 || ${seen[v]:-0} )); then bad=1; break; fi
-    seen[v]=1
-  done
-  dez=( "${!seen[@]}" )
-  if [[ -n $bad ]] || (( ${#dez[@]} != 15 )); then
+  (( ${#nums[@]} == 15 )) || bad='precisa de 15 dezenas'
+  if [[ -z $bad ]]; then
+    for n in "${nums[@]}"; do
+      if ! [[ $n =~ ^[0-9]{1,2}$ ]]; then bad='dezena inválida'; break; fi
+      v=$(( 10#$n ))
+      if (( v < 1 || v > 25 )); then bad='dezena fora de 1 a 25'; break; fi
+      if (( ${seen[v]:-0} )); then bad='dezena repetida'; break; fi
+      seen[v]=1
+    done
+  fi
+  if [[ -n $bad ]]; then
     (( ++ninv ))
-    printf '# combinacao  %5d (%s): inválida, ignorada\n' \
-      "$ln" "${nums[*]}" >&2
+    printf '# [ERRO] combinacao  %5d (%s): inválida (%s), ignorada\n' \
+      "$ln" "${nums[*]}" "$bad" >&2
     continue
   fi
+  dez=( "${!seen[@]}" )
   printf -v dz '%02d ' "${dez[@]}"; dz=${dz% }
 
   if [[ -n $EXP ]] && (( $(date +%s) >= EXP - 15 )); then

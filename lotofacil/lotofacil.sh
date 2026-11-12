@@ -190,8 +190,10 @@ html_add <<'EOF'
 
     body {
       margin: 0;
-      padding: 8px;
+      padding: 6px 2vw;
+      min-width: max-content;
       font: 12px/1.3 "Trebuchet MS", "Lucida Sans", Arial, sans-serif;
+      font-size: clamp(12px, 1.05vw, 48px);
       color: var(--texto);
     }
 
@@ -205,13 +207,14 @@ html_add <<'EOF'
     .resultados {
       border-collapse: separate;
       border-spacing: 0;
+      width: 100%;
       white-space: nowrap;
       font-variant-numeric: tabular-nums;
     }
 
     .resultados th,
     .resultados td {
-      padding: 1px 3px;
+      padding: 0.1em 0.25em;
       text-align: center;
       border-right: 1px solid var(--borda);
       border-bottom: 1px solid var(--borda);
@@ -220,7 +223,7 @@ html_add <<'EOF'
     .resultados th:first-child,
     .resultados td:first-child { border-left: 1px solid var(--borda); }
 
-    .resultados th:nth-child(n+3):nth-child(-n+27) { width: 26px; }
+    .resultados th:nth-child(n+3):nth-child(-n+27) { width: 2.2em; }
 
     .resultados th:nth-child(28),
     .resultados td:nth-child(28) { border-left: 2px solid #999; }
