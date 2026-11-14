@@ -213,7 +213,7 @@ html_add <<'EOF'
 
     header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
     header img { max-width: 100%; height: auto; }
-    h1 { margin: 8px 0; font-size: 1.6rem; }
+    h1 { margin: 8px 0; font-size: 1.2rem; }
     h2 { font-size: 1.2rem; }
     header small { font-size: 0.85rem; color: #777; }
     header small strong { font-weight: 700; color: #333; }
@@ -255,6 +255,11 @@ html_add <<'EOF'
 
     .resultados tfoot th { text-align: left; background: var(--cab-2); }
     .resultados tfoot tr:first-child > * { border-top: 2px solid #999; }
+    .resultados tfoot td.vz { border: 0; }
+    .resultados tfoot td.sm { border-left: 1px solid var(--borda); font-weight: 700; }
+    .resultados tfoot td.mx { background: #ffb74d; font-weight: 700; }
+    .resultados tfoot td.mn { background: #81d4fa; font-weight: 700; }
+    .resultados tfoot td.nv { background: #e53935; color: #fff; font-weight: 700; }
 
     .estat { border-collapse: collapse; font-variant-numeric: tabular-nums; }
     .estat th { text-align: left; padding: 1px 12px 1px 0; }
@@ -272,9 +277,8 @@ html_add <<EOF
 <body>
   <header>
     <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAALwAAAAiCAYAAADlJbOYAAAAGXRFWHRTb2Z0d2FyZQBBZG9iZSBJbWFnZVJlYWR5ccllPAAAA4FpVFh0WE1MOmNvbS5hZG9iZS54bXAAAAAAADw/eHBhY2tldCBiZWdpbj0i77u/IiBpZD0iVzVNME1wQ2VoaUh6cmVTek5UY3prYzlkIj8+IDx4OnhtcG1ldGEgeG1sbnM6eD0iYWRvYmU6bnM6bWV0YS8iIHg6eG1wdGs9IkFkb2JlIFhNUCBDb3JlIDUuNi1jMTQwIDc5LjE2MDQ1MSwgMjAxNy8wNS8wNi0wMTowODoyMSAgICAgICAgIj4gPHJkZjpSREYgeG1sbnM6cmRmPSJodHRwOi8vd3d3LnczLm9yZy8xOTk5LzAyLzIyLXJkZi1zeW50YXgtbnMjIj4gPHJkZjpEZXNjcmlwdGlvbiByZGY6YWJvdXQ9IiIgeG1sbnM6eG1wTU09Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC9tbS8iIHhtbG5zOnN0UmVmPSJodHRwOi8vbnMuYWRvYmUuY29tL3hhcC8xLjAvc1R5cGUvUmVzb3VyY2VSZWYjIiB4bWxuczp4bXA9Imh0dHA6Ly9ucy5hZG9iZS5jb20veGFwLzEuMC8iIHhtcE1NOk9yaWdpbmFsRG9jdW1lbnRJRD0ieG1wLmRpZDpmMzU4Nzg0Yi03MmE4LTQ1ZjctYWVkMy1lMThhYzNjNTQ0ZTUiIHhtcE1NOkRvY3VtZW50SUQ9InhtcC5kaWQ6ODNBMjc2NDg1NkZFMTFFODkzQTVGMTJCNjJEMTMyM0IiIHhtcE1NOkluc3RhbmNlSUQ9InhtcC5paWQ6ODNBMjc2NDc1NkZFMTFFODkzQTVGMTJCNjJEMTMyM0IiIHhtcDpDcmVhdG9yVG9vbD0iQWRvYmUgUGhvdG9zaG9wIENDIChNYWNpbnRvc2gpIj4gPHhtcE1NOkRlcml2ZWRGcm9tIHN0UmVmOmluc3RhbmNlSUQ9InhtcC5paWQ6NGZjZGQyNWYtMWRkNS00ZjI0LTgyMjctM2E4OWE1NThlZjY3IiBzdFJlZjpkb2N1bWVudElEPSJhZG9iZTpkb2NpZDpwaG90b3Nob3A6MjIwODRkOGQtOWFlZi03MjQzLWI5MjktMzc0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" alt="Dia de Sorte" loading="lazy">
-    <h1>Últimos Resultados</h1>
+    <h1>Últimos ${#todas[@]} resultados</h1>
     <small>Atualizado em <strong>${TMSTAMP}</strong></small>
-    <a href="#estatisticas">Estatísticas</a>
   </header>
   <main>
     <table class="resultados">
@@ -358,20 +362,55 @@ html_add <<'EOF'
       <tfoot>
 EOF
 
-tfoot_u="        <tr><th colspan=\"2\" scope=\"row\" title=\"Concursos desde que a dezena foi sorteada (0 = saiu no último)\">Último sorteio</th>"
-tfoot_o="        <tr><th colspan=\"2\" scope=\"row\" title=\"Vezes que a dezena foi sorteada na amostra\">Ocorrência</th>"
+ult_v=()
+um_max=-1
+um_min=$n_total
+oc_max=0
+oc_min=$n_total
 for ((i = 1; i <= 31; i++)); do
+  ult_v[i]=-1
   if (( ult_pos[i] > 0 )); then
-    tfoot_u+="<td>$((n_total - ult_pos[i]))</td>"
-    at_total=$((at_total + n_total - ult_pos[i]))
+    ult_v[i]=$((n_total - ult_pos[i]))
+    if (( ult_v[i] > um_max )); then um_max=${ult_v[i]}; fi
+    if (( ult_v[i] < um_min )); then um_min=${ult_v[i]}; fi
+    at_total=$((at_total + ult_v[i]))
     at_cnt=$((at_cnt + 1))
-  else
-    tfoot_u+="<td>-</td>"
   fi
-  tfoot_o+="<td>${ocorr[i]}</td>"
+  if (( ocorr[i] > oc_max )); then oc_max=${ocorr[i]}; fi
+  if (( ocorr[i] < oc_min )); then oc_min=${ocorr[i]}; fi
   oc_total=$((oc_total + ocorr[i]))
   oc_sq=$((oc_sq + ocorr[i] * ocorr[i]))
 done
+
+tfoot_u="        <tr><th colspan=\"2\" scope=\"row\" title=\"Concursos desde que a dezena foi sorteada (0 = saiu no último). Laranja = maior, azul = menor\">Último sorteio</th>"
+tfoot_o="        <tr><th colspan=\"2\" scope=\"row\" title=\"Vezes que a dezena foi sorteada na amostra. Laranja = maior, azul = menor\">Ocorrência</th>"
+for ((i = 1; i <= 31; i++)); do
+  cls_u='' cls_o=''
+  if (( oc_max != oc_min )); then
+    if (( ocorr[i] == oc_max )); then
+      cls_o=' class="mx"'
+    elif (( ocorr[i] == oc_min )); then
+      cls_o=' class="mn"'
+    fi
+  fi
+  if (( ult_v[i] >= 0 )); then
+    if (( um_max != um_min )); then
+      if (( ult_v[i] == um_max )); then
+        cls_u=' class="mx"'
+      elif (( ult_v[i] == um_min )); then
+        cls_u=' class="mn"'
+      fi
+    fi
+    tfoot_u+="<td$cls_u>${ult_v[i]}</td>"
+  else
+    tfoot_u+="<td class=\"nv\">-</td>"
+  fi
+  tfoot_o+="<td$cls_o>${ocorr[i]}</td>"
+done
+if (( n_total > 0 )); then
+  soma_media=$(( (soma_total * 2 + n_total) / (2 * n_total) ))
+  tfoot_u+="<td class=\"vz\" colspan=\"2\"></td><td class=\"sm\" title=\"Soma média dos $n_total concursos\">$soma_media</td>"
+fi
 TMP_HTML+="$tfoot_u</tr>"$'\n'
 TMP_HTML+="$tfoot_o</tr>"$'\n'
 
@@ -383,8 +422,6 @@ html_add <<'EOF'
 EOF
 
 if (( n_total > 0 )); then
-  m=$(( (soma_total * 200 + n_total) / (2 * n_total) ))
-  printf -v media '%d.%02d' $((m / 100)) $((m % 100))
   if (( n_total > 1 )); then
     mr=$(( (rep_total * 200 + n_total - 1) / (2 * (n_total - 1)) ))
     printf -v rep_media '%d.%02d' $((mr / 100)) $((mr % 100))
@@ -398,12 +435,6 @@ if (( n_total > 0 )); then
   isqrt $((100000000 * (31 * oc_sq - oc_total * oc_total)))
   md=$(( (ISQRT + 1550) / 3100 ))
   printf -v oc_dp '%d.%02d' $((md / 100)) $((md % 100))
-  oc_max=0
-  oc_min=$n_total
-  for ((i = 1; i <= 31; i++)); do
-    if (( ocorr[i] > oc_max )); then oc_max=${ocorr[i]}; fi
-    if (( ocorr[i] < oc_min )); then oc_min=${ocorr[i]}; fi
-  done
   dz_max='' dz_min=''
   for ((i = 1; i <= 31; i++)); do
     if (( ocorr[i] == oc_max )); then dz_max+="${dz_max:+, }$i"; fi
@@ -412,7 +443,7 @@ if (( n_total > 0 )); then
   rot_max=dezena rot_min=dezena
   if [[ $dz_max == *,* ]]; then rot_max=dezenas; fi
   if [[ $dz_min == *,* ]]; then rot_min=dezenas; fi
-  TMP_HTML+="      <p>Combinações = $n_total · Soma média = $media · Repetição média = $rep_media · "
+  TMP_HTML+="      <p>Repetição média = $rep_media · "
   TMP_HTML+="<span class=\"dica\" title=\"7 dezenas × $n_total concursos ÷ 31 dezenas = 7 × $n_total ÷ 31. Não depende dos resultados, só do tamanho da amostra.\">Ocorrência média (sempre fixo nas $n_total amostras)</span> = $oc_media</p>"$'\n'
   TMP_HTML+="      <p><span class=\"dica\" title=\"Média da linha 'Último sorteio': há quantos concursos, em média, cada dezena não sai (dezenas que não saíram na amostra ficam de fora).\">Atraso médio</span> = $at_media · "
   TMP_HTML+="<span class=\"dica\" title=\"Desvio padrão da linha 'Ocorrência' entre as 31 dezenas. Quanto maior, mais desigual foi a frequência das dezenas na amostra.\">Desvio padrão da ocorrência</span> = $oc_dp · "
@@ -426,6 +457,15 @@ if (( n_total > 0 )); then
   estat_linha SeqS s_seqs
   estat_linha SeqNS s_seqns
   estat_linha Mês s_mes "$n_total" mes
+  declare -A s_mes0=()
+  for ((i = 1; i <= 12; i++)); do
+    if [[ -z ${s_mes[$i]:-} ]]; then s_mes0[$i]=0; fi
+  done
+  if (( ${#s_mes0[@]} > 0 )); then
+    estat_linha "Meses ausentes" s_mes0 "$n_total" mes
+  else
+    TMP_HTML+="          <tr><th scope=\"row\">Meses ausentes</th><td>nenhum</td></tr>"$'\n'
+  fi
   TMP_HTML+="        </tbody>"$'\n'"      </table>"$'\n'
 else
   TMP_HTML+="      <p>Nenhum concurso encontrado.</p>"$'\n'
